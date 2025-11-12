@@ -1,5 +1,6 @@
 #include "components/motion/MotionController.h"
 
+#include <algorithm>
 #include <cmath>
 #include <task.h>
 
@@ -87,13 +88,15 @@ void MotionController::Update(int16_t x, int16_t y, int16_t z, uint32_t nbSteps)
 
 int32_t MotionController::AverageAccelerationLastMinute() {
   TickType_t now = xTaskGetTickCount();
-  PruneOldAccelerationSamples(now);
+  return AverageAccelerationLastMinuteInternal(now);
+}
 
-  if (accelSampleCount == 0) {
+int32_t MotionController::LoggedMinutesAverage() const {
+  if (minuteAverageCount == 0) {
     return 0;
   }
 
-  return static_cast<int32_t>(accelSampleTotal / static_cast<int64_t>(accelSampleCount));
+  return static_cast<int32_t>(minuteAverageTotal / static_cast<int64_t>(minuteAverageCount));
 }
 
 MotionController::AccelStats MotionController::GetAccelStats() const {
@@ -163,7 +166,7 @@ bool MotionController::ShouldLowerSleep() const {
   return true;
 }
 
-void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types) {
+void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fsController) {
   switch (types) {
     case Drivers::Bma421::DeviceTypes::BMA421:
       this->deviceType = DeviceTypes::BMA421;
@@ -175,6 +178,10 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types) {
       this->deviceType = DeviceTypes::Unknown;
       break;
   }
+
+  fs = &fsController;
+  LoadMinuteAverageLog();
+  lastLoggedMinuteTick = xTaskGetTickCount();
 }
 
 void MotionController::AddAccelerationSample(TickType_t timestamp, int32_t magnitude) {
@@ -192,6 +199,7 @@ void MotionController::AddAccelerationSample(TickType_t timestamp, int32_t magni
   accelSampleTotal += magnitude;
 
   PruneOldAccelerationSamples(timestamp);
+  MaybeStoreMinuteAverage(timestamp);
 }
 
 void MotionController::PruneOldAccelerationSamples(TickType_t currentTimestamp) {
@@ -208,4 +216,139 @@ void MotionController::PruneOldAccelerationSamples(TickType_t currentTimestamp) 
     accelSampleTail = (accelSampleTail + 1) % accelSamplesWindow;
     accelSampleCount--;
   }
+}
+
+int32_t MotionController::AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp) {
+  PruneOldAccelerationSamples(currentTimestamp);
+
+  if (accelSampleCount == 0) {
+    return 0;
+  }
+
+  return static_cast<int32_t>(accelSampleTotal / static_cast<int64_t>(accelSampleCount));
+}
+
+void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
+  if (fs == nullptr) {
+    return;
+  }
+
+  if (lastLoggedMinuteTick == 0) {
+    lastLoggedMinuteTick = timestamp;
+    return;
+  }
+
+  if (timestamp - lastLoggedMinuteTick < minuteDurationTicks) {
+    return;
+  }
+
+  int32_t average = AverageAccelerationLastMinuteInternal(timestamp);
+  if (average == 0 && accelSampleCount == 0) {
+    lastLoggedMinuteTick = timestamp;
+    return;
+  }
+
+  AppendMinuteAverage(average);
+  lastLoggedMinuteTick = timestamp;
+}
+
+void MotionController::AppendMinuteAverage(int32_t average) {
+  if (minuteAverageCount < minuteAverageLogSize) {
+    size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
+    minuteAverages[index] = average;
+    minuteAverageCount++;
+  } else {
+    minuteAverageTotal -= minuteAverages[minuteAverageStart];
+    minuteAverages[minuteAverageStart] = average;
+    minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
+  }
+
+  minuteAverageTotal += average;
+  SaveMinuteAverageLog();
+}
+
+void MotionController::EnsureLogDirectory() {
+  if (fs == nullptr) {
+    return;
+  }
+
+  lfs_dir_t dir;
+  if (fs->DirOpen(minuteAverageDirectory, &dir) == LFS_ERR_OK) {
+    fs->DirClose(&dir);
+    return;
+  }
+
+  fs->DirCreate(minuteAverageDirectory);
+}
+
+void MotionController::SaveMinuteAverageLog() {
+  if (fs == nullptr) {
+    return;
+  }
+
+  EnsureLogDirectory();
+
+  lfs_file_t file;
+  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
+    return;
+  }
+
+  struct Header {
+    uint32_t version;
+    uint32_t count;
+  } header {minuteAverageLogVersion, static_cast<uint32_t>(minuteAverageCount)};
+
+  fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+
+  for (size_t i = 0; i < minuteAverageCount; ++i) {
+    size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
+    int32_t value = minuteAverages[index];
+    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+  }
+
+  fs->FileClose(&file);
+}
+
+void MotionController::LoadMinuteAverageLog() {
+  if (fs == nullptr) {
+    return;
+  }
+
+  lfs_file_t file;
+  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
+    return;
+  }
+
+  struct Header {
+    uint32_t version;
+    uint32_t count;
+  } header {};
+
+  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
+    fs->FileClose(&file);
+    return;
+  }
+
+  if (header.version != minuteAverageLogVersion) {
+    fs->FileClose(&file);
+    return;
+  }
+
+  minuteAverageStart = 0;
+  minuteAverageCount = 0;
+  minuteAverageTotal = 0;
+
+  size_t count = std::min(static_cast<size_t>(header.count), minuteAverageLogSize);
+
+  for (size_t i = 0; i < count; ++i) {
+    int32_t value = 0;
+    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
+      break;
+    }
+    minuteAverages[i] = value;
+    minuteAverageTotal += value;
+    minuteAverageCount++;
+  }
+
+  fs->FileClose(&file);
 }
