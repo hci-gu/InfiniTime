@@ -2,24 +2,27 @@ if(DEFINED ENABLE_USERAPPS)
     # FORCE ensures cached builds pick up a new ENABLE_USERAPPS value.
     set(USERAPP_TYPES ${ENABLE_USERAPPS} CACHE STRING "List of user apps to build into the firmware" FORCE)
 else ()
-    set(DEFAULT_USER_APP_TYPES "Apps::StopWatch")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Alarm")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Timer")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Steps")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::HeartRate")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Music")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Paint")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Paddle")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Twos")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Dice")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Metronome")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Navigation")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::AccelAvg")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Calculator")
-    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Weather")
-    #set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Motion")
+    set(DEFAULT_USER_APP_TYPES
+        Apps::StopWatch
+        Apps::Alarm
+        Apps::Timer
+        Apps::Steps
+        Apps::HeartRate
+        Apps::Music
+        Apps::Paint
+        Apps::Paddle
+        Apps::Twos
+        Apps::Dice
+        Apps::Metronome
+        Apps::Navigation
+        Apps::AccelAvg
+        Apps::Calculator
+        Apps::Weather
+        )
+    # Apps::Motion intentionally excluded until it is ready for end users.
+    string(REPLACE ";" ", " DEFAULT_USER_APP_TYPES_STRING "${DEFAULT_USER_APP_TYPES}")
     # Overwrite cached defaults so new built-in apps appear without needing a cache wipe.
-    set(USERAPP_TYPES "${DEFAULT_USER_APP_TYPES}" CACHE STRING "List of user apps to build into the firmware" FORCE)
+    set(USERAPP_TYPES "${DEFAULT_USER_APP_TYPES_STRING}" CACHE STRING "List of user apps to build into the firmware" FORCE)
 endif ()
 
 if(DEFINED ENABLE_WATCHFACES)
