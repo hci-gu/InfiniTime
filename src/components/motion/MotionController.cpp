@@ -1,5 +1,6 @@
 #include "components/motion/MotionController.h"
 
+#include <cmath>
 #include <task.h>
 
 #include "utility/Math.h"
@@ -73,11 +74,26 @@ void MotionController::Update(int16_t x, int16_t y, int16_t z, uint32_t nbSteps)
 
   stats = GetAccelStats();
 
+  int64_t magnitudeSquared = static_cast<int64_t>(x) * x + static_cast<int64_t>(y) * y + static_cast<int64_t>(z) * z;
+  int32_t magnitude = static_cast<int32_t>(std::sqrt(static_cast<double>(magnitudeSquared)));
+  AddAccelerationSample(time, magnitude);
+
   int32_t deltaSteps = nbSteps - oldSteps;
   if (deltaSteps > 0) {
     currentTripSteps += deltaSteps;
   }
   SetSteps(Days::Today, nbSteps);
+}
+
+int32_t MotionController::AverageAccelerationLastMinute() {
+  TickType_t now = xTaskGetTickCount();
+  PruneOldAccelerationSamples(now);
+
+  if (accelSampleCount == 0) {
+    return 0;
+  }
+
+  return static_cast<int32_t>(accelSampleTotal / static_cast<int64_t>(accelSampleCount));
 }
 
 MotionController::AccelStats MotionController::GetAccelStats() const {
@@ -158,5 +174,38 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types) {
     default:
       this->deviceType = DeviceTypes::Unknown;
       break;
+  }
+}
+
+void MotionController::AddAccelerationSample(TickType_t timestamp, int32_t magnitude) {
+  if (accelSampleCount == accelSamplesWindow) {
+    accelSampleTotal -= accelSamples[accelSampleTail].magnitude;
+    accelSampleTail = (accelSampleTail + 1) % accelSamplesWindow;
+    accelSampleCount--;
+  }
+
+  accelSamples[accelSampleHead].timestamp = timestamp;
+  accelSamples[accelSampleHead].magnitude = magnitude;
+  accelSampleHead = (accelSampleHead + 1) % accelSamplesWindow;
+
+  accelSampleCount++;
+  accelSampleTotal += magnitude;
+
+  PruneOldAccelerationSamples(timestamp);
+}
+
+void MotionController::PruneOldAccelerationSamples(TickType_t currentTimestamp) {
+  constexpr TickType_t window = configTICK_RATE_HZ * 60;
+
+  while (accelSampleCount > 0) {
+    const auto& oldest = accelSamples[accelSampleTail];
+    TickType_t age = currentTimestamp - oldest.timestamp;
+    if (age <= window) {
+      break;
+    }
+
+    accelSampleTotal -= oldest.magnitude;
+    accelSampleTail = (accelSampleTail + 1) % accelSamplesWindow;
+    accelSampleCount--;
   }
 }

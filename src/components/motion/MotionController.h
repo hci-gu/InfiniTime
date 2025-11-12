@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 #include <FreeRTOS.h>
@@ -60,6 +61,8 @@ namespace Pinetime {
         return accumulatedSpeed;
       }
 
+      int32_t AverageAccelerationLastMinute();
+
       DeviceTypes DeviceType() const {
         return deviceType;
       }
@@ -84,6 +87,21 @@ namespace Pinetime {
 
       TickType_t lastTime = 0;
       TickType_t time = 0;
+
+      struct AccelSample {
+        TickType_t timestamp = 0;
+        int32_t magnitude = 0;
+      };
+
+      void AddAccelerationSample(TickType_t timestamp, int32_t magnitude);
+      void PruneOldAccelerationSamples(TickType_t currentTimestamp);
+
+      static constexpr size_t accelSamplesWindow = 600; // 10Hz * 60s
+      std::array<AccelSample, accelSamplesWindow> accelSamples = {};
+      size_t accelSampleHead = 0;
+      size_t accelSampleTail = 0;
+      size_t accelSampleCount = 0;
+      int64_t accelSampleTotal = 0;
 
       struct AccelStats {
         static constexpr uint8_t numHistory = 2;
