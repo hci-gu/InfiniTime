@@ -1,5 +1,6 @@
 if(DEFINED ENABLE_USERAPPS)
-    set(USERAPP_TYPES ${ENABLE_USERAPPS} CACHE STRING "List of user apps to build into the firmware")
+    # FORCE ensures cached builds pick up a new ENABLE_USERAPPS value.
+    set(USERAPP_TYPES ${ENABLE_USERAPPS} CACHE STRING "List of user apps to build into the firmware" FORCE)
 else ()
     set(DEFAULT_USER_APP_TYPES "Apps::StopWatch")
     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Alarm")
@@ -17,7 +18,8 @@ else ()
     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Calculator")
     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Weather")
     #set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Motion")
-    set(USERAPP_TYPES "${DEFAULT_USER_APP_TYPES}" CACHE STRING "List of user apps to build into the firmware")
+    # Overwrite cached defaults so new built-in apps appear without needing a cache wipe.
+    set(USERAPP_TYPES "${DEFAULT_USER_APP_TYPES}" CACHE STRING "List of user apps to build into the firmware" FORCE)
 endif ()
 
 if(DEFINED ENABLE_WATCHFACES)
