@@ -180,8 +180,18 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pineti
   }
 
   fs = &fsController;
+  storageAccessible = true;
   LoadMinuteAverageLog();
   lastLoggedMinuteTick = xTaskGetTickCount();
+}
+
+void MotionController::OnStorageWake() {
+  storageAccessible = true;
+  MaybePersistMinuteAverageLog();
+}
+
+void MotionController::OnStorageSleep() {
+  storageAccessible = false;
 }
 
 void MotionController::AddAccelerationSample(TickType_t timestamp, int32_t magnitude) {
@@ -264,7 +274,8 @@ void MotionController::AppendMinuteAverage(int32_t average) {
   }
 
   minuteAverageTotal += average;
-  SaveMinuteAverageLog();
+  minuteAverageDirty = true;
+  MaybePersistMinuteAverageLog();
 }
 
 void MotionController::EnsureLogDirectory() {
@@ -307,6 +318,7 @@ void MotionController::SaveMinuteAverageLog() {
   }
 
   fs->FileClose(&file);
+  minuteAverageDirty = false;
 }
 
 void MotionController::LoadMinuteAverageLog() {
@@ -351,4 +363,12 @@ void MotionController::LoadMinuteAverageLog() {
   }
 
   fs->FileClose(&file);
+}
+
+void MotionController::MaybePersistMinuteAverageLog() {
+  if (!minuteAverageDirty || fs == nullptr || !storageAccessible) {
+    return;
+  }
+
+  SaveMinuteAverageLog();
 }

@@ -70,6 +70,9 @@ namespace Pinetime {
 
       void Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fs);
 
+      void OnStorageWake();
+      void OnStorageSleep();
+
       void SetService(Pinetime::Controllers::MotionService* service) {
         this->service = service;
       }
@@ -151,6 +154,8 @@ namespace Pinetime {
       size_t minuteAverageCount = 0;
       int64_t minuteAverageTotal = 0;
       TickType_t lastLoggedMinuteTick = 0;
+      bool minuteAverageDirty = false;
+      bool storageAccessible = true;
 
       void LoadMinuteAverageLog();
       void SaveMinuteAverageLog();
@@ -158,6 +163,7 @@ namespace Pinetime {
       void AppendMinuteAverage(int32_t average);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
+      void MaybePersistMinuteAverageLog();
     };
   }
 }
