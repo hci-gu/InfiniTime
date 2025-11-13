@@ -2,16 +2,21 @@
 
 #include <array>
 #include <cstdint>
+#include <chrono>
 
 #include <FreeRTOS.h>
+#include <semphr.h>
 
 #include "drivers/Bma421.h"
-#include "components/ble/MotionService.h"
 #include "components/fs/FS.h"
 #include "utility/CircularBuffer.h"
+#include "utility/Span.h"
 
 namespace Pinetime {
   namespace Controllers {
+    class DateTime;
+    class MotionService;
+
     class MotionController {
     public:
       enum class DeviceTypes {
@@ -82,17 +87,39 @@ namespace Pinetime {
         return service;
       }
 
-      size_t LoggedMinuteCount() const {
-        return minuteAverageCount;
-      }
+      size_t LoggedMinuteCount() const;
 
       int32_t LoggedMinutesAverage() const;
       int32_t LoggedMinutesHeartRateAverage() const;
-      bool HasLoggedHeartRateAverage() const {
-        return minuteHeartRateSampleCount > 0;
-      }
+      bool HasLoggedHeartRateAverage() const;
 
       void ClearMinuteAverageLog();
+
+      struct MinuteSample {
+        uint32_t timestamp = 0;
+        int16_t accelerationAverage = 0;
+        int16_t heartRateAverage = 0;
+        uint8_t flags = 0;
+      };
+
+      enum MinuteSampleFlags : uint8_t {
+        SampleFlagNone = 0,
+        SampleFlagMissingHeartRate = 1u << 0,
+      };
+
+      struct MinuteLogRange {
+        uint32_t oldestEpoch = 0;
+        uint32_t newestEpoch = 0;
+        size_t count = 0;
+      };
+
+      MinuteLogRange OldestNewest() const;
+      size_t CopyMinutes(uint32_t startEpoch, size_t maxSamples, gsl::span<MinuteSample> out) const;
+      void MarkMinutesTransferred(uint32_t upToEpoch);
+
+      void SetDateTimeController(Pinetime::Controllers::DateTime* controller) {
+        dateTimeController = controller;
+      }
 
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
@@ -166,7 +193,7 @@ namespace Pinetime {
 
       static constexpr size_t minuteAverageLogSize = 1440;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 2;
+      static constexpr uint32_t minuteAverageLogVersion = 3;
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 
@@ -182,14 +209,39 @@ namespace Pinetime {
       TickType_t lastLoggedMinuteTick = 0;
       bool minuteAverageDirty = false;
       bool storageAccessible = true;
+      std::array<uint32_t, minuteAverageLogSize> minuteTimestamps = {};
+      std::array<uint8_t, minuteAverageLogSize> minuteFlags = {};
+
+      mutable SemaphoreHandle_t minuteLogMutex = nullptr;
+      mutable StaticSemaphore_t minuteLogMutexBuffer = {};
+
+      Pinetime::Controllers::DateTime* dateTimeController = nullptr;
+
+      class MinuteLogLock {
+      public:
+        explicit MinuteLogLock(const MotionController& controller);
+        ~MinuteLogLock();
+
+      private:
+        const MotionController& controller;
+      };
+
+      void LockMinuteLog() const;
+      void UnlockMinuteLog() const;
+      uint32_t CurrentEpochSeconds() const;
+      uint32_t NormalizeEpochToMinute(uint32_t epochSeconds) const;
+      void InitializeMinuteLogMutex();
 
       void LoadMinuteAverageLog();
       void SaveMinuteAverageLog();
       void EnsureLogDirectory();
-      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage);
+      void AppendMinuteAverage(int32_t accelerationAverage,
+                              int32_t heartRateAverage,
+                              uint32_t epochSeconds,
+                              uint8_t flags);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
-      int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
+      int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp, bool* hasSample = nullptr);
       void MaybePersistMinuteAverageLog();
     };
   }

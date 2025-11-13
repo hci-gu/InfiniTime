@@ -1,4 +1,5 @@
 #include "components/ble/NimbleController.h"
+#include <array>
 #include <cstring>
 
 #include <nrf_log.h>
@@ -48,6 +49,7 @@ NimbleController::NimbleController(Pinetime::System::SystemTask& systemTask,
     immediateAlertService {systemTask, notificationManager},
     heartRateService {*this, heartRateController},
     motionService {*this, motionController},
+    minuteDataService {*this, motionController, dateTimeController, bleController},
     fsService {systemTask, fs},
     serviceDiscovery({&currentTimeClient, &alertNotificationClient}) {
 }
@@ -97,6 +99,7 @@ void NimbleController::Init() {
   immediateAlertService.Init();
   heartRateService.Init();
   motionService.Init();
+  minuteDataService.Init();
   fsService.Init();
 
   int rc;
@@ -161,8 +164,16 @@ void NimbleController::StartAdvertising() {
   fields.uuids16 = &HeartRateService::heartRateServiceUuid;
   fields.num_uuids16 = 1;
   fields.uuids16_is_complete = 1;
-  fields.uuids128 = &DfuService::serviceUuid;
-  fields.num_uuids128 = 1;
+  std::array<ble_uuid128_t, 2> advUuids {};
+  advUuids[0] = DfuService::serviceUuid;
+  bool includeMinuteService = minuteDataService.ShouldAdvertise();
+  if (includeMinuteService) {
+    advUuids[1] = MinuteDataService::ServiceUuid();
+    fields.num_uuids128 = 2;
+  } else {
+    fields.num_uuids128 = 1;
+  }
+  fields.uuids128 = advUuids.data();
   fields.uuids128_is_complete = 1;
   fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
@@ -207,6 +218,7 @@ int NimbleController::OnGAPEvent(ble_gap_event* event) {
       } else {
         connectionHandle = event->connect.conn_handle;
         bleController.Connect();
+        minuteDataService.OnConnect(event->connect.conn_handle);
         systemTask.PushMessage(Pinetime::System::Messages::BleConnected);
         // Service discovery is deferred via systemtask
       }
@@ -224,6 +236,7 @@ int NimbleController::OnGAPEvent(ble_gap_event* event) {
       currentTimeClient.Reset();
       alertNotificationClient.Reset();
       connectionHandle = BLE_HS_CONN_HANDLE_NONE;
+      minuteDataService.OnDisconnect();
       if (bleController.IsConnected()) {
         bleController.Disconnect();
         fastAdvCount = 0;
@@ -325,12 +338,22 @@ int NimbleController::OnGAPEvent(ble_gap_event* event) {
       if (event->subscribe.reason == BLE_GAP_SUBSCRIBE_REASON_TERM) {
         heartRateService.UnsubscribeNotification(event->subscribe.attr_handle);
         motionService.UnsubscribeNotification(event->subscribe.attr_handle);
+        minuteDataService.UnsubscribeNotification(
+          event->subscribe.attr_handle, event->subscribe.prev_notify, event->subscribe.prev_indicate);
       } else if (event->subscribe.prev_notify == 0 && event->subscribe.cur_notify == 1) {
         heartRateService.SubscribeNotification(event->subscribe.attr_handle);
         motionService.SubscribeNotification(event->subscribe.attr_handle);
+        minuteDataService.SubscribeNotification(event->subscribe.attr_handle, true, false);
       } else if (event->subscribe.prev_notify == 1 && event->subscribe.cur_notify == 0) {
         heartRateService.UnsubscribeNotification(event->subscribe.attr_handle);
         motionService.UnsubscribeNotification(event->subscribe.attr_handle);
+        minuteDataService.UnsubscribeNotification(event->subscribe.attr_handle, true, false);
+      }
+
+      if (event->subscribe.prev_indicate == 0 && event->subscribe.cur_indicate == 1) {
+        minuteDataService.SubscribeNotification(event->subscribe.attr_handle, false, true);
+      } else if (event->subscribe.prev_indicate == 1 && event->subscribe.cur_indicate == 0) {
+        minuteDataService.UnsubscribeNotification(event->subscribe.attr_handle, false, true);
       }
       break;
 

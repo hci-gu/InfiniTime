@@ -5,6 +5,8 @@
 #include <limits>
 #include <task.h>
 
+#include "components/ble/MotionService.h"
+#include "components/datetime/DateTimeController.h"
 #include "utility/Math.h"
 
 using namespace Pinetime::Controllers;
@@ -36,6 +38,50 @@ namespace {
     }
     return prevYAngle - yAngle;
   }
+}
+
+MotionController::MinuteLogLock::MinuteLogLock(const MotionController& controller) : controller {controller} {
+  controller.LockMinuteLog();
+}
+
+MotionController::MinuteLogLock::~MinuteLogLock() {
+  controller.UnlockMinuteLog();
+}
+
+void MotionController::InitializeMinuteLogMutex() {
+  if (minuteLogMutex == nullptr) {
+    minuteLogMutex = xSemaphoreCreateMutexStatic(&minuteLogMutexBuffer);
+  }
+}
+
+void MotionController::LockMinuteLog() const {
+  if (minuteLogMutex != nullptr) {
+    xSemaphoreTake(minuteLogMutex, portMAX_DELAY);
+  }
+}
+
+void MotionController::UnlockMinuteLog() const {
+  if (minuteLogMutex != nullptr) {
+    xSemaphoreGive(minuteLogMutex);
+  }
+}
+
+uint32_t MotionController::CurrentEpochSeconds() const {
+  if (dateTimeController == nullptr) {
+    return 0;
+  }
+
+  auto now = dateTimeController->CurrentDateTime();
+  auto seconds = std::chrono::time_point_cast<std::chrono::seconds>(now);
+  auto epoch = std::chrono::duration_cast<std::chrono::seconds>(seconds.time_since_epoch());
+  return static_cast<uint32_t>(epoch.count());
+}
+
+uint32_t MotionController::NormalizeEpochToMinute(uint32_t epochSeconds) const {
+  if (epochSeconds == 0) {
+    return 0;
+  }
+  return epochSeconds - (epochSeconds % 60);
 }
 
 void MotionController::AdvanceDay() {
@@ -92,7 +138,13 @@ int32_t MotionController::AverageAccelerationLastMinute() {
   return AverageAccelerationLastMinuteInternal(now);
 }
 
+size_t MotionController::LoggedMinuteCount() const {
+  MinuteLogLock lock {*this};
+  return minuteAverageCount;
+}
+
 int32_t MotionController::LoggedMinutesAverage() const {
+  MinuteLogLock lock {*this};
   if (minuteAverageCount == 0) {
     return 0;
   }
@@ -101,6 +153,7 @@ int32_t MotionController::LoggedMinutesAverage() const {
 }
 
 int32_t MotionController::LoggedMinutesHeartRateAverage() const {
+  MinuteLogLock lock {*this};
   if (minuteHeartRateSampleCount == 0) {
     return 0;
   }
@@ -108,16 +161,132 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
   return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
+bool MotionController::HasLoggedHeartRateAverage() const {
+  MinuteLogLock lock {*this};
+  return minuteHeartRateSampleCount > 0;
+}
+
 void MotionController::ClearMinuteAverageLog() {
-  minuteAverageStart = 0;
-  minuteAverageCount = 0;
-  minuteAverageTotal = 0;
-  minuteHeartRateTotal = 0;
-  minuteHeartRateSampleCount = 0;
-  std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
-  std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
-  minuteAverageDirty = true;
+  {
+    MinuteLogLock lock {*this};
+    minuteAverageStart = 0;
+    minuteAverageCount = 0;
+    minuteAverageTotal = 0;
+    minuteHeartRateTotal = 0;
+    minuteHeartRateSampleCount = 0;
+    std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
+    std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
+    std::fill(minuteTimestamps.begin(), minuteTimestamps.end(), 0);
+    std::fill(minuteFlags.begin(), minuteFlags.end(), 0);
+    minuteAverageDirty = true;
+  }
   MaybePersistMinuteAverageLog();
+}
+
+MotionController::MinuteLogRange MotionController::OldestNewest() const {
+  MinuteLogLock lock {*this};
+  MinuteLogRange range;
+  if (minuteAverageCount == 0) {
+    return range;
+  }
+
+  auto findOldest = [&](size_t iterations) -> uint32_t {
+    for (size_t i = 0; i < iterations; ++i) {
+      size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
+      if (minuteTimestamps[index] != 0) {
+        return minuteTimestamps[index];
+      }
+    }
+    return 0;
+  };
+
+  auto findNewest = [&](size_t iterations) -> uint32_t {
+    for (size_t i = 0; i < iterations; ++i) {
+      size_t index = (minuteAverageStart + minuteAverageCount + minuteAverageLogSize - 1 - i) % minuteAverageLogSize;
+      if (minuteTimestamps[index] != 0) {
+        return minuteTimestamps[index];
+      }
+    }
+    return 0;
+  };
+
+  range.oldestEpoch = findOldest(minuteAverageCount);
+  range.newestEpoch = findNewest(minuteAverageCount);
+  range.count = minuteAverageCount;
+  return range;
+}
+
+size_t MotionController::CopyMinutes(uint32_t startEpoch, size_t maxSamples, gsl::span<MinuteSample> out) const {
+  MinuteLogLock lock {*this};
+  if (out.size() == 0 || minuteAverageCount == 0) {
+    return 0;
+  }
+
+  const size_t limit = std::min(maxSamples, out.size());
+  size_t copied = 0;
+
+  for (size_t i = 0; i < minuteAverageCount && copied < limit; ++i) {
+    size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
+    uint32_t timestamp = minuteTimestamps[index];
+    if (timestamp == 0) {
+      continue;
+    }
+    if (startEpoch > 0 && timestamp < startEpoch) {
+      continue;
+    }
+
+    MinuteSample sample;
+    sample.timestamp = timestamp;
+    sample.accelerationAverage = static_cast<int16_t>(
+      std::clamp<int32_t>(minuteAccelerationAverages[index], std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()));
+    sample.heartRateAverage = minuteHeartRateAverages[index];
+    sample.flags = minuteFlags[index];
+    out[copied++] = sample;
+  }
+
+  return copied;
+}
+
+void MotionController::MarkMinutesTransferred(uint32_t upToEpoch) {
+  if (upToEpoch == 0) {
+    return;
+  }
+
+  bool modified = false;
+  {
+    MinuteLogLock lock {*this};
+    while (minuteAverageCount > 0) {
+      uint32_t timestamp = minuteTimestamps[minuteAverageStart];
+      if (timestamp == 0 || timestamp > upToEpoch) {
+        break;
+      }
+
+      const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
+      minuteAverageTotal -= oldestAcceleration;
+
+      const auto oldestHeartRate = minuteHeartRateAverages[minuteAverageStart];
+      if ((minuteFlags[minuteAverageStart] & SampleFlagMissingHeartRate) == 0 && oldestHeartRate > 0 && minuteHeartRateSampleCount > 0) {
+        minuteHeartRateTotal -= oldestHeartRate;
+        minuteHeartRateSampleCount--;
+      }
+
+      minuteAccelerationAverages[minuteAverageStart] = 0;
+      minuteHeartRateAverages[minuteAverageStart] = 0;
+      minuteTimestamps[minuteAverageStart] = 0;
+      minuteFlags[minuteAverageStart] = 0;
+      minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
+      minuteAverageCount--;
+      modified = true;
+    }
+
+    if (modified) {
+      minuteAverageDirty = true;
+    }
+  }
+
+  if (modified) {
+    MaybePersistMinuteAverageLog();
+  }
 }
 
 MotionController::AccelStats MotionController::GetAccelStats() const {
@@ -188,6 +357,7 @@ bool MotionController::ShouldLowerSleep() const {
 }
 
 void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fsController) {
+  InitializeMinuteLogMutex();
   switch (types) {
     case Drivers::Bma421::DeviceTypes::BMA421:
       this->deviceType = DeviceTypes::BMA421;
@@ -300,18 +470,25 @@ int32_t MotionController::AverageAccelerationLastMinuteInternal(TickType_t curre
   return static_cast<int32_t>(accelSampleTotal / static_cast<int64_t>(accelSampleCount));
 }
 
-int32_t MotionController::AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp) {
+int32_t MotionController::AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp, bool* hasSample) {
   taskENTER_CRITICAL();
   PruneOldHeartRateSamplesLocked(currentTimestamp);
 
   if (heartRateSampleCount == 0) {
     taskEXIT_CRITICAL();
+    if (hasSample != nullptr) {
+      *hasSample = false;
+    }
     return 0;
   }
 
   int64_t total = heartRateSampleTotal;
   int64_t count = heartRateSampleCount;
   taskEXIT_CRITICAL();
+
+  if (hasSample != nullptr) {
+    *hasSample = true;
+  }
 
   return static_cast<int32_t>(total / count);
 }
@@ -331,47 +508,67 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
   }
 
   int32_t accelerationAverage = AverageAccelerationLastMinuteInternal(timestamp);
-  int32_t heartRateAverage = AverageHeartRateLastMinuteInternal(timestamp);
+  bool hasHeartRateSample = false;
+  int32_t heartRateAverage = AverageHeartRateLastMinuteInternal(timestamp, &hasHeartRateSample);
 
   if (accelerationAverage == 0 && accelSampleCount == 0) {
     lastLoggedMinuteTick = timestamp;
     return;
   }
 
-  AppendMinuteAverage(accelerationAverage, heartRateAverage);
+  uint8_t flags = hasHeartRateSample ? SampleFlagNone : SampleFlagMissingHeartRate;
+  uint32_t epochSeconds = NormalizeEpochToMinute(CurrentEpochSeconds());
+  AppendMinuteAverage(accelerationAverage, heartRateAverage, epochSeconds, flags);
   lastLoggedMinuteTick = timestamp;
 }
 
-void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
-  const int32_t clampedHeartRate = std::clamp<int32_t>(
-    heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
-  const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
+void MotionController::AppendMinuteAverage(int32_t accelerationAverage,
+                                          int32_t heartRateAverage,
+                                          uint32_t epochSeconds,
+                                          uint8_t flags) {
+  bool appended = false;
+  {
+    MinuteLogLock lock {*this};
+    const int32_t clampedHeartRate = std::clamp<int32_t>(
+      heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+    int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
 
-  if (minuteAverageCount < minuteAverageLogSize) {
-    size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
-    minuteAccelerationAverages[index] = accelerationAverage;
-    minuteHeartRateAverages[index] = storedHeartRate;
-    minuteAverageCount++;
-  } else {
-    const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
-    const auto oldestHeartRate = minuteHeartRateAverages[minuteAverageStart];
-    minuteAverageTotal -= oldestAcceleration;
-    if (oldestHeartRate > 0 && minuteHeartRateSampleCount > 0) {
-      minuteHeartRateTotal -= oldestHeartRate;
-      minuteHeartRateSampleCount--;
+    size_t index = 0;
+    if (minuteAverageCount < minuteAverageLogSize) {
+      index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
+      minuteAverageCount++;
+    } else {
+      index = minuteAverageStart;
+      const auto oldestAcceleration = minuteAccelerationAverages[index];
+      const auto oldestHeartRate = minuteHeartRateAverages[index];
+      minuteAverageTotal -= oldestAcceleration;
+      if ((minuteFlags[index] & SampleFlagMissingHeartRate) == 0 && oldestHeartRate > 0 && minuteHeartRateSampleCount > 0) {
+        minuteHeartRateTotal -= oldestHeartRate;
+        minuteHeartRateSampleCount--;
+      }
+      minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
     }
-    minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
-    minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
-    minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
+
+    minuteAccelerationAverages[index] = accelerationAverage;
+    if ((flags & SampleFlagMissingHeartRate) != 0) {
+      storedHeartRate = 0;
+    }
+    minuteHeartRateAverages[index] = storedHeartRate;
+    minuteTimestamps[index] = epochSeconds;
+    minuteFlags[index] = flags;
+
+    minuteAverageTotal += accelerationAverage;
+    if ((flags & SampleFlagMissingHeartRate) == 0 && storedHeartRate > 0) {
+      minuteHeartRateTotal += storedHeartRate;
+      minuteHeartRateSampleCount++;
+    }
+    minuteAverageDirty = true;
+    appended = true;
   }
 
-  minuteAverageTotal += accelerationAverage;
-  if (storedHeartRate > 0) {
-    minuteHeartRateTotal += storedHeartRate;
-    minuteHeartRateSampleCount++;
+  if (appended) {
+    MaybePersistMinuteAverageLog();
   }
-  minuteAverageDirty = true;
-  MaybePersistMinuteAverageLog();
 }
 
 void MotionController::EnsureLogDirectory() {
@@ -393,6 +590,7 @@ void MotionController::SaveMinuteAverageLog() {
     return;
   }
 
+  MinuteLogLock lock {*this};
   EnsureLogDirectory();
 
   lfs_file_t file;
@@ -408,13 +606,16 @@ void MotionController::SaveMinuteAverageLog() {
   fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
 
   struct DiskEntry {
+    uint32_t timestamp;
     int32_t acceleration;
-    int32_t heartRate;
+    int16_t heartRate;
+    uint8_t flags;
+    uint8_t reserved;
   };
 
   for (size_t i = 0; i < minuteAverageCount; ++i) {
     size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
+    DiskEntry entry {minuteTimestamps[index], minuteAccelerationAverages[index], minuteHeartRateAverages[index], minuteFlags[index], 0};
     fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
   }
 
@@ -432,6 +633,7 @@ void MotionController::LoadMinuteAverageLog() {
     return;
   }
 
+  MinuteLogLock lock {*this};
   struct Header {
     uint32_t version;
     uint32_t count;
@@ -442,7 +644,7 @@ void MotionController::LoadMinuteAverageLog() {
     return;
   }
 
-  if (header.version != minuteAverageLogVersion && header.version != 1) {
+  if (header.version != minuteAverageLogVersion && header.version != 1 && header.version != 2) {
     fs->FileClose(&file);
     return;
   }
@@ -455,6 +657,23 @@ void MotionController::LoadMinuteAverageLog() {
 
   size_t count = std::min(static_cast<size_t>(header.count), minuteAverageLogSize);
 
+  auto assignTimestamp = [&](size_t index, uint32_t startEpoch) {
+    if (startEpoch == 0) {
+      minuteTimestamps[index] = 0;
+      return;
+    }
+    minuteTimestamps[index] = startEpoch + static_cast<uint32_t>(index) * 60;
+  };
+
+  uint32_t nowEpoch = NormalizeEpochToMinute(CurrentEpochSeconds());
+  uint32_t startEpoch = 0;
+  if (nowEpoch != 0 && count > 0) {
+    uint32_t spanSeconds = static_cast<uint32_t>((count - 1) * 60);
+    if (nowEpoch > spanSeconds) {
+      startEpoch = nowEpoch - spanSeconds;
+    }
+  }
+
   if (header.version == 1) {
     for (size_t i = 0; i < count; ++i) {
       int32_t value = 0;
@@ -463,11 +682,13 @@ void MotionController::LoadMinuteAverageLog() {
       }
       minuteAccelerationAverages[i] = value;
       minuteHeartRateAverages[i] = 0;
+      minuteFlags[i] = SampleFlagMissingHeartRate;
+      assignTimestamp(i, startEpoch);
       minuteAverageTotal += value;
       minuteAverageCount++;
     }
-  } else {
-    struct DiskEntry {
+  } else if (header.version == 2) {
+    struct DiskEntryV2 {
       int32_t acceleration;
       int32_t heartRate;
     } entry {};
@@ -480,9 +701,36 @@ void MotionController::LoadMinuteAverageLog() {
       const int32_t clampedHeartRate = std::clamp<int32_t>(
         entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
       minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+      bool hasHeartRate = clampedHeartRate > 0;
+      minuteFlags[i] = hasHeartRate ? SampleFlagNone : SampleFlagMissingHeartRate;
+      assignTimestamp(i, startEpoch);
       minuteAverageTotal += entry.acceleration;
-      if (clampedHeartRate > 0) {
+      if (hasHeartRate) {
         minuteHeartRateTotal += clampedHeartRate;
+        minuteHeartRateSampleCount++;
+      }
+      minuteAverageCount++;
+    }
+  } else {
+    struct DiskEntry {
+      uint32_t timestamp;
+      int32_t acceleration;
+      int16_t heartRate;
+      uint8_t flags;
+      uint8_t reserved;
+    } entry {};
+
+    for (size_t i = 0; i < count; ++i) {
+      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+        break;
+      }
+      minuteAccelerationAverages[i] = entry.acceleration;
+      minuteHeartRateAverages[i] = entry.heartRate;
+      minuteTimestamps[i] = entry.timestamp;
+      minuteFlags[i] = entry.flags;
+      minuteAverageTotal += entry.acceleration;
+      if ((entry.flags & SampleFlagMissingHeartRate) == 0 && entry.heartRate > 0) {
+        minuteHeartRateTotal += entry.heartRate;
         minuteHeartRateSampleCount++;
       }
       minuteAverageCount++;
@@ -493,7 +741,13 @@ void MotionController::LoadMinuteAverageLog() {
 }
 
 void MotionController::MaybePersistMinuteAverageLog() {
-  if (!minuteAverageDirty || fs == nullptr || !storageAccessible) {
+  bool dirty = false;
+  {
+    MinuteLogLock lock {*this};
+    dirty = minuteAverageDirty;
+  }
+
+  if (!dirty || fs == nullptr || !storageAccessible) {
     return;
   }
 
