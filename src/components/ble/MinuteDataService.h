@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 
 #define min
 #define max
@@ -61,6 +62,8 @@ namespace Pinetime {
       bool CanStream() const;
       uint16_t NegotiatedMtu(uint16_t conn_handle) const;
       uint32_t NowEpochSeconds() const;
+      bool EnsureTransferBuffer(size_t requiredSamples);
+      void ReleaseTransferBuffer();
 
       static int ControlCallback(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
       static int StatusCallback(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
@@ -89,7 +92,8 @@ namespace Pinetime {
       uint16_t connectionHandle = BLE_HS_CONN_HANDLE_NONE;
 
       ble_npl_callout sendCallout;
-      std::array<MotionController::MinuteSample, MotionController::MinuteLogCapacity> transferBuffer {};
+      std::unique_ptr<MotionController::MinuteSample[]> transferBuffer;
+      size_t transferBufferCapacity = 0;
       std::array<uint8_t, 244> notifyBuffer {};
     };
   }

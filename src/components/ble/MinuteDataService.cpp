@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <new>
 
 #include <host/ble_hs.h>
 #include <nimble/nimble_port.h>
@@ -220,19 +221,30 @@ void MinuteDataService::HandleRangeRequest(uint16_t conn_handle, const uint8_t* 
 
   uint32_t startEpoch = ReadLe32(&data[1]);
   uint16_t requested = ReadLe16(&data[5]);
-  auto span = gsl::span<MotionController::MinuteSample> {transferBuffer.data(), transferBuffer.size()};
-  size_t copied = motionController.CopyMinutes(startEpoch, requested, span);
+  size_t requestCount = std::min(static_cast<size_t>(requested), static_cast<size_t>(MotionController::MinuteLogCapacity));
+  if (requestCount == 0) {
+    SendStatusFrame(MinuteDataProtocol::ErrorCode::InvalidRange);
+    return;
+  }
+
+  if (!EnsureTransferBuffer(requestCount)) {
+    SendStatusFrame(MinuteDataProtocol::ErrorCode::InternalError);
+    return;
+  }
+
+  auto span = gsl::span<MotionController::MinuteSample> {transferBuffer.get(), requestCount};
+  size_t copied = motionController.CopyMinutes(startEpoch, requestCount, span);
   if (copied == 0) {
     SendStatusFrame(MinuteDataProtocol::ErrorCode::NothingToSend);
     return;
   }
   NRF_LOG_INFO("Minute data range request start=%lu count=%u available=%u",
                static_cast<unsigned long>(startEpoch),
-               static_cast<unsigned>(requested),
+               static_cast<unsigned>(requestCount),
                static_cast<unsigned>(copied));
 
   currentTransfer.startEpoch = startEpoch;
-  currentTransfer.requestedCount = requested;
+  currentTransfer.requestedCount = requestCount;
   currentTransfer.bufferedSamples = copied;
   currentTransfer.nextSample = 0;
   currentTransfer.acknowledgedIndex = 0;
@@ -248,7 +260,7 @@ void MinuteDataService::HandleAck(const uint8_t* data, size_t len) {
     return;
   }
 
-  if (lastSentSequence == 0) {
+  if (lastSentSequence == 0 || transferBuffer == nullptr) {
     return;
   }
 
@@ -278,22 +290,23 @@ void MinuteDataService::HandleAck(const uint8_t* data, size_t len) {
   motionController.MarkMinutesTransferred(sample.timestamp);
 
   if (ackIndex >= currentTransfer.bufferedSamples) {
-    currentTransfer = {};
     lastSentSequence = 0;
+    ReleaseTransferBuffer();
   }
 }
 
 void MinuteDataService::HandleAbort() {
   if (transferState == TransferState::Idle) {
+    ReleaseTransferBuffer();
     return;
   }
 
   ble_npl_callout_stop(&sendCallout);
   NRF_LOG_INFO("Minute data transfer aborted");
   transferState = TransferState::Idle;
-  currentTransfer = {};
   nextSequence = 1;
   lastSentSequence = 0;
+  ReleaseTransferBuffer();
 }
 
 void MinuteDataService::SendControlResponse(const uint8_t* data, size_t len) {
@@ -375,6 +388,12 @@ void MinuteDataService::SendNextChunk() {
     return;
   }
 
+  if (transferBuffer == nullptr) {
+    transferState = TransferState::Idle;
+    SendStatusFrame(MinuteDataProtocol::ErrorCode::InternalError);
+    return;
+  }
+
   uint16_t mtu = NegotiatedMtu(connectionHandle);
   size_t maxPayload = (mtu > 3) ? static_cast<size_t>(mtu - 3) : notifyBuffer.size();
   maxPayload = std::min(maxPayload, notifyBuffer.size());
@@ -425,4 +444,29 @@ void MinuteDataService::SendNextChunk() {
     transferState = TransferState::Idle;
     SendStatusFrame(MinuteDataProtocol::ErrorCode::Ok);
   }
+}
+
+bool MinuteDataService::EnsureTransferBuffer(size_t requiredSamples) {
+  if (requiredSamples == 0) {
+    return false;
+  }
+
+  if (transferBuffer != nullptr && transferBufferCapacity >= requiredSamples) {
+    return true;
+  }
+
+  auto* buffer = new (std::nothrow) MotionController::MinuteSample[requiredSamples];
+  if (buffer == nullptr) {
+    return false;
+  }
+
+  transferBuffer.reset(buffer);
+  transferBufferCapacity = requiredSamples;
+  return true;
+}
+
+void MinuteDataService::ReleaseTransferBuffer() {
+  transferBuffer.reset();
+  transferBufferCapacity = 0;
+  currentTransfer = {};
 }
