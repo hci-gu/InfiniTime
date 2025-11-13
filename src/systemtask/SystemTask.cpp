@@ -83,6 +83,7 @@ SystemTask::SystemTask(Drivers::SpiMaster& spi,
                      heartRateController,
                      motionController,
                      fs) {
+  motionController.SetDateTimeController(&dateTimeController);
 }
 
 void SystemTask::Start() {
