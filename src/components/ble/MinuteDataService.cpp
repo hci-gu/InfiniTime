@@ -344,7 +344,7 @@ void MinuteDataService::ScheduleNextChunk() {
     return;
   }
 
-  ble_npl_callout_reset(&sendCallout, os_time_ms_to_ticks32(20));
+  ble_npl_callout_reset(&sendCallout, ble_npl_time_ms_to_ticks32(20));
 }
 
 void MinuteDataService::SendCalloutCallback(ble_npl_event* event) {
