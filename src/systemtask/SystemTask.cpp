@@ -112,6 +112,8 @@ void SystemTask::Work() {
   spiNorFlash.Init();
   spiNorFlash.Wakeup();
 
+  motionController.OnStorageWake();
+
   fs.Init();
 
   nimbleController.Init();
@@ -136,7 +138,7 @@ void SystemTask::Work() {
   twiMaster.Init();
 
   motionSensor.Init();
-  motionController.Init(motionSensor.DeviceType());
+  motionController.Init(motionSensor.DeviceType(), fs);
   settingsController.Init();
 
   displayApp.Register(this);
@@ -313,6 +315,7 @@ void SystemTask::Work() {
           if (BootloaderVersion::IsValid()) {
             // First versions of the bootloader do not expose their version and cannot initialize the SPI NOR FLASH
             // if it's in sleep mode. Avoid bricked device by disabling sleep mode on these versions.
+            motionController.OnStorageSleep();
             spiNorFlash.Sleep();
           }
 
@@ -417,6 +420,7 @@ void SystemTask::GoToRunning() {
     }
 
     spiNorFlash.Wakeup();
+    motionController.OnStorageWake();
   }
 
   displayApp.PushMessage(Pinetime::Applications::Display::Messages::GoToRunning);

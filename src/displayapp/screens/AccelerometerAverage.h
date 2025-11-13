@@ -20,7 +20,7 @@ namespace Pinetime {
 
       private:
         Controllers::MotionController& motionController;
-        lv_obj_t* titleLabel = nullptr;
+        lv_obj_t* countLabel = nullptr;
         lv_obj_t* averageLabel = nullptr;
         lv_task_t* taskRefresh = nullptr;
       };

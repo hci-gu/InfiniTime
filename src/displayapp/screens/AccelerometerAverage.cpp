@@ -6,15 +6,15 @@ using namespace Pinetime::Applications::Screens;
 
 AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController)
   : motionController {motionController} {
-  titleLabel = lv_label_create(lv_scr_act(), nullptr);
-  lv_label_set_text_static(titleLabel, "Accel avg (1m)");
-  lv_obj_set_style_local_text_color(titleLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
-  lv_obj_align(titleLabel, lv_scr_act(), LV_ALIGN_IN_TOP_MID, 0, 10);
+  countLabel = lv_label_create(lv_scr_act(), nullptr);
+  lv_label_set_text_static(countLabel, "Minutes stored: 0");
+  lv_obj_set_style_local_text_color(countLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
+  lv_obj_align(countLabel, lv_scr_act(), LV_ALIGN_IN_TOP_MID, 0, 10);
 
   averageLabel = lv_label_create(lv_scr_act(), nullptr);
   lv_obj_set_style_local_text_font(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &jetbrains_mono_42);
   lv_obj_set_style_local_text_color(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-  lv_label_set_text_static(averageLabel, "0 mg");
+  lv_label_set_text_static(averageLabel, "Avg: 0 mg");
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
 
   Refresh();
@@ -29,7 +29,10 @@ AccelerometerAverage::~AccelerometerAverage() {
 }
 
 void AccelerometerAverage::Refresh() {
-  auto average = motionController.AverageAccelerationLastMinute();
-  lv_label_set_text_fmt(averageLabel, "%ld mg", static_cast<long>(average));
+  auto storedMinutes = motionController.LoggedMinuteCount();
+  lv_label_set_text_fmt(countLabel, "Minutes stored: %lu", static_cast<unsigned long>(storedMinutes));
+
+  auto average = motionController.LoggedMinutesAverage();
+  lv_label_set_text_fmt(averageLabel, "Avg: %ld mg", static_cast<long>(average));
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
 }

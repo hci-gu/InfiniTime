@@ -7,6 +7,7 @@
 
 #include "drivers/Bma421.h"
 #include "components/ble/MotionService.h"
+#include "components/fs/FS.h"
 #include "utility/CircularBuffer.h"
 
 namespace Pinetime {
@@ -67,7 +68,10 @@ namespace Pinetime {
         return deviceType;
       }
 
-      void Init(Pinetime::Drivers::Bma421::DeviceTypes types);
+      void Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fs);
+
+      void OnStorageWake();
+      void OnStorageSleep();
 
       void SetService(Pinetime::Controllers::MotionService* service) {
         this->service = service;
@@ -76,6 +80,12 @@ namespace Pinetime {
       Pinetime::Controllers::MotionService* GetService() const {
         return service;
       }
+
+      size_t LoggedMinuteCount() const {
+        return minuteAverageCount;
+      }
+
+      int32_t LoggedMinutesAverage() const;
 
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
@@ -130,6 +140,30 @@ namespace Pinetime {
 
       DeviceTypes deviceType = DeviceTypes::Unknown;
       Pinetime::Controllers::MotionService* service = nullptr;
+
+      static constexpr size_t minuteAverageLogSize = 1440;
+      static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
+      static constexpr uint32_t minuteAverageLogVersion = 1;
+      static constexpr const char minuteAverageDirectory[] = "/.system";
+      static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
+
+      Pinetime::Controllers::FS* fs = nullptr;
+
+      std::array<int32_t, minuteAverageLogSize> minuteAverages = {};
+      size_t minuteAverageStart = 0;
+      size_t minuteAverageCount = 0;
+      int64_t minuteAverageTotal = 0;
+      TickType_t lastLoggedMinuteTick = 0;
+      bool minuteAverageDirty = false;
+      bool storageAccessible = true;
+
+      void LoadMinuteAverageLog();
+      void SaveMinuteAverageLog();
+      void EnsureLogDirectory();
+      void AppendMinuteAverage(int32_t average);
+      void MaybeStoreMinuteAverage(TickType_t timestamp);
+      int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
+      void MaybePersistMinuteAverageLog();
     };
   }
 }
