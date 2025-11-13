@@ -27,6 +27,7 @@ namespace Pinetime {
         lv_task_t* taskRefresh = nullptr;
 
         void DeleteLoggedMinutes();
+        static void DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t event);
       };
     }
 

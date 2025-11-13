@@ -4,17 +4,6 @@
 
 using namespace Pinetime::Applications::Screens;
 
-namespace {
-  void DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t event) {
-    if (event != LV_EVENT_CLICKED) {
-      return;
-    }
-
-    auto* screen = static_cast<AccelerometerAverage*>(obj->user_data);
-    screen->DeleteLoggedMinutes();
-  }
-}
-
 
 AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController)
   : motionController {motionController} {
@@ -69,4 +58,13 @@ void AccelerometerAverage::Refresh() {
 void AccelerometerAverage::DeleteLoggedMinutes() {
   motionController.ClearMinuteAverageLog();
   Refresh();
+}
+
+void AccelerometerAverage::DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t event) {
+  if (event != LV_EVENT_CLICKED) {
+    return;
+  }
+
+  auto* screen = static_cast<AccelerometerAverage*>(obj->user_data);
+  screen->DeleteLoggedMinutes();
 }
