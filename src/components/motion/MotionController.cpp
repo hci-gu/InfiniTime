@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <task.h>
 
 #include "utility/Math.h"
@@ -330,24 +331,31 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
 }
 
 void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
+  const int32_t clampedHeartRate =
+    std::clamp(heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+  const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
+
   if (minuteAverageCount < minuteAverageLogSize) {
     size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
-    minuteAverages[index] = MinuteAverageEntry {accelerationAverage, heartRateAverage};
+    minuteAccelerationAverages[index] = accelerationAverage;
+    minuteHeartRateAverages[index] = storedHeartRate;
     minuteAverageCount++;
   } else {
-    const auto& oldest = minuteAverages[minuteAverageStart];
-    minuteAverageTotal -= oldest.acceleration;
-    if (oldest.heartRate > 0 && minuteHeartRateSampleCount > 0) {
-      minuteHeartRateTotal -= oldest.heartRate;
+    const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
+    const auto oldestHeartRate = minuteHeartRateAverages[minuteAverageStart];
+    minuteAverageTotal -= oldestAcceleration;
+    if (oldestHeartRate > 0 && minuteHeartRateSampleCount > 0) {
+      minuteHeartRateTotal -= oldestHeartRate;
       minuteHeartRateSampleCount--;
     }
-    minuteAverages[minuteAverageStart] = MinuteAverageEntry {accelerationAverage, heartRateAverage};
+    minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
+    minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
     minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
   }
 
   minuteAverageTotal += accelerationAverage;
-  if (heartRateAverage > 0) {
-    minuteHeartRateTotal += heartRateAverage;
+  if (storedHeartRate > 0) {
+    minuteHeartRateTotal += storedHeartRate;
     minuteHeartRateSampleCount++;
   }
   minuteAverageDirty = true;
@@ -394,7 +402,7 @@ void MotionController::SaveMinuteAverageLog() {
 
   for (size_t i = 0; i < minuteAverageCount; ++i) {
     size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    DiskEntry entry {minuteAverages[index].acceleration, minuteAverages[index].heartRate};
+    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
     fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
   }
 
@@ -441,8 +449,8 @@ void MotionController::LoadMinuteAverageLog() {
       if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
         break;
       }
-      minuteAverages[i].acceleration = value;
-      minuteAverages[i].heartRate = 0;
+      minuteAccelerationAverages[i] = value;
+      minuteHeartRateAverages[i] = 0;
       minuteAverageTotal += value;
       minuteAverageCount++;
     }
@@ -456,11 +464,13 @@ void MotionController::LoadMinuteAverageLog() {
       if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
         break;
       }
-      minuteAverages[i].acceleration = entry.acceleration;
-      minuteAverages[i].heartRate = entry.heartRate;
+      minuteAccelerationAverages[i] = entry.acceleration;
+      const int32_t clampedHeartRate =
+        std::clamp(entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+      minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
       minuteAverageTotal += entry.acceleration;
-      if (entry.heartRate > 0) {
-        minuteHeartRateTotal += entry.heartRate;
+      if (clampedHeartRate > 0) {
+        minuteHeartRateTotal += clampedHeartRate;
         minuteHeartRateSampleCount++;
       }
       minuteAverageCount++;

@@ -118,7 +118,10 @@ namespace Pinetime {
       void PruneOldHeartRateSamplesLocked(TickType_t currentTimestamp);
 
       static constexpr size_t accelSamplesWindow = 600; // 10Hz * 60s
-      static constexpr size_t heartRateSamplesWindow = 600;
+      // Heart-rate readings arrive far less frequently than acceleration (typically 1Hz).
+      // Keeping a full 60s history for up to ~4 samples per second keeps memory usage low
+      // enough to avoid boot-time allocation failures while still covering the full minute.
+      static constexpr size_t heartRateSamplesWindow = 240;
       std::array<AccelSample, accelSamplesWindow> accelSamples = {};
       size_t accelSampleHead = 0;
       size_t accelSampleTail = 0;
@@ -167,12 +170,8 @@ namespace Pinetime {
 
       Pinetime::Controllers::FS* fs = nullptr;
 
-      struct MinuteAverageEntry {
-        int32_t acceleration = 0;
-        int32_t heartRate = 0;
-      };
-
-      std::array<MinuteAverageEntry, minuteAverageLogSize> minuteAverages = {};
+      std::array<int32_t, minuteAverageLogSize> minuteAccelerationAverages = {};
+      std::array<int16_t, minuteAverageLogSize> minuteHeartRateAverages = {};
       size_t minuteAverageStart = 0;
       size_t minuteAverageCount = 0;
       int64_t minuteAverageTotal = 0;
