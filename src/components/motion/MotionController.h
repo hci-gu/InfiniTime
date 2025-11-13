@@ -92,6 +92,8 @@ namespace Pinetime {
         return minuteHeartRateSampleCount > 0;
       }
 
+      void ClearMinuteAverageLog();
+
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
       uint32_t currentTripSteps = 0;
