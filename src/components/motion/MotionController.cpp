@@ -331,8 +331,8 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
 }
 
 void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
-  const int32_t clampedHeartRate =
-    std::clamp(heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+  const int32_t clampedHeartRate = std::clamp<int32_t>(
+    heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
 
   if (minuteAverageCount < minuteAverageLogSize) {
@@ -465,8 +465,8 @@ void MotionController::LoadMinuteAverageLog() {
         break;
       }
       minuteAccelerationAverages[i] = entry.acceleration;
-      const int32_t clampedHeartRate =
-        std::clamp(entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+      const int32_t clampedHeartRate = std::clamp<int32_t>(
+        entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
       minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
       minuteAverageTotal += entry.acceleration;
       if (clampedHeartRate > 0) {
