@@ -13,6 +13,8 @@ namespace Pinetime {
   }
 
   namespace Controllers {
+    class MotionController;
+
     class HeartRateController {
     public:
       enum class States : uint8_t { Stopped, NotEnoughData, NoTouch, Running };
@@ -33,12 +35,14 @@ namespace Pinetime {
       }
 
       void SetService(Pinetime::Controllers::HeartRateService* service);
+      void SetMotionController(MotionController* motionController);
 
     private:
       Applications::HeartRateTask* task = nullptr;
       States state = States::Stopped;
       uint8_t heartRate = 0;
       Pinetime::Controllers::HeartRateService* service = nullptr;
+      MotionController* motionController = nullptr;
     };
   }
 }

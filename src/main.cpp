@@ -360,6 +360,7 @@ int main() {
     NoInit_MagicWord = NoInit_MagicValue;
   }
 
+  heartRateController.SetMotionController(&motionController);
   systemTask.Start();
 
   nimble_port_init();

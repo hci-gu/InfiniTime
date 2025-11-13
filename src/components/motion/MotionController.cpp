@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <task.h>
 
 #include "utility/Math.h"
@@ -97,6 +98,14 @@ int32_t MotionController::LoggedMinutesAverage() const {
   }
 
   return static_cast<int32_t>(minuteAverageTotal / static_cast<int64_t>(minuteAverageCount));
+}
+
+int32_t MotionController::LoggedMinutesHeartRateAverage() const {
+  if (minuteHeartRateSampleCount == 0) {
+    return 0;
+  }
+
+  return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
 MotionController::AccelStats MotionController::GetAccelStats() const {
@@ -212,6 +221,31 @@ void MotionController::AddAccelerationSample(TickType_t timestamp, int32_t magni
   MaybeStoreMinuteAverage(timestamp);
 }
 
+void MotionController::AddHeartRateSample(TickType_t timestamp, uint16_t heartRate) {
+  if (heartRate == 0) {
+    return;
+  }
+
+  taskENTER_CRITICAL();
+
+  if (heartRateSampleCount == heartRateSamplesWindow) {
+    heartRateSampleTotal -= heartRateSamples[heartRateSampleTail].value;
+    heartRateSampleTail = (heartRateSampleTail + 1) % heartRateSamplesWindow;
+    heartRateSampleCount--;
+  }
+
+  heartRateSamples[heartRateSampleHead].timestamp = timestamp;
+  heartRateSamples[heartRateSampleHead].value = heartRate;
+  heartRateSampleHead = (heartRateSampleHead + 1) % heartRateSamplesWindow;
+
+  heartRateSampleCount++;
+  heartRateSampleTotal += heartRate;
+
+  PruneOldHeartRateSamplesLocked(timestamp);
+
+  taskEXIT_CRITICAL();
+}
+
 void MotionController::PruneOldAccelerationSamples(TickType_t currentTimestamp) {
   constexpr TickType_t window = configTICK_RATE_HZ * 60;
 
@@ -228,6 +262,22 @@ void MotionController::PruneOldAccelerationSamples(TickType_t currentTimestamp) 
   }
 }
 
+void MotionController::PruneOldHeartRateSamplesLocked(TickType_t currentTimestamp) {
+  constexpr TickType_t window = configTICK_RATE_HZ * 60;
+
+  while (heartRateSampleCount > 0) {
+    const auto& oldest = heartRateSamples[heartRateSampleTail];
+    TickType_t age = currentTimestamp - oldest.timestamp;
+    if (age <= window) {
+      break;
+    }
+
+    heartRateSampleTotal -= oldest.value;
+    heartRateSampleTail = (heartRateSampleTail + 1) % heartRateSamplesWindow;
+    heartRateSampleCount--;
+  }
+}
+
 int32_t MotionController::AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp) {
   PruneOldAccelerationSamples(currentTimestamp);
 
@@ -236,6 +286,22 @@ int32_t MotionController::AverageAccelerationLastMinuteInternal(TickType_t curre
   }
 
   return static_cast<int32_t>(accelSampleTotal / static_cast<int64_t>(accelSampleCount));
+}
+
+int32_t MotionController::AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp) {
+  taskENTER_CRITICAL();
+  PruneOldHeartRateSamplesLocked(currentTimestamp);
+
+  if (heartRateSampleCount == 0) {
+    taskEXIT_CRITICAL();
+    return 0;
+  }
+
+  int64_t total = heartRateSampleTotal;
+  int64_t count = heartRateSampleCount;
+  taskEXIT_CRITICAL();
+
+  return static_cast<int32_t>(total / count);
 }
 
 void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
@@ -252,28 +318,46 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
-  int32_t average = AverageAccelerationLastMinuteInternal(timestamp);
-  if (average == 0 && accelSampleCount == 0) {
+  int32_t accelerationAverage = AverageAccelerationLastMinuteInternal(timestamp);
+  int32_t heartRateAverage = AverageHeartRateLastMinuteInternal(timestamp);
+
+  if (accelerationAverage == 0 && accelSampleCount == 0) {
     lastLoggedMinuteTick = timestamp;
     return;
   }
 
-  AppendMinuteAverage(average);
+  AppendMinuteAverage(accelerationAverage, heartRateAverage);
   lastLoggedMinuteTick = timestamp;
 }
 
-void MotionController::AppendMinuteAverage(int32_t average) {
+void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
+  const int32_t clampedHeartRate = std::clamp<int32_t>(
+    heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+  const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
+
   if (minuteAverageCount < minuteAverageLogSize) {
     size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
-    minuteAverages[index] = average;
+    minuteAccelerationAverages[index] = accelerationAverage;
+    minuteHeartRateAverages[index] = storedHeartRate;
     minuteAverageCount++;
   } else {
-    minuteAverageTotal -= minuteAverages[minuteAverageStart];
-    minuteAverages[minuteAverageStart] = average;
+    const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
+    const auto oldestHeartRate = minuteHeartRateAverages[minuteAverageStart];
+    minuteAverageTotal -= oldestAcceleration;
+    if (oldestHeartRate > 0 && minuteHeartRateSampleCount > 0) {
+      minuteHeartRateTotal -= oldestHeartRate;
+      minuteHeartRateSampleCount--;
+    }
+    minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
+    minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
     minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
   }
 
-  minuteAverageTotal += average;
+  minuteAverageTotal += accelerationAverage;
+  if (storedHeartRate > 0) {
+    minuteHeartRateTotal += storedHeartRate;
+    minuteHeartRateSampleCount++;
+  }
   minuteAverageDirty = true;
   MaybePersistMinuteAverageLog();
 }
@@ -311,10 +395,15 @@ void MotionController::SaveMinuteAverageLog() {
 
   fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
 
+  struct DiskEntry {
+    int32_t acceleration;
+    int32_t heartRate;
+  };
+
   for (size_t i = 0; i < minuteAverageCount; ++i) {
     size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    int32_t value = minuteAverages[index];
-    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&value), sizeof(value));
+    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
+    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
   }
 
   fs->FileClose(&file);
@@ -341,7 +430,7 @@ void MotionController::LoadMinuteAverageLog() {
     return;
   }
 
-  if (header.version != minuteAverageLogVersion) {
+  if (header.version != minuteAverageLogVersion && header.version != 1) {
     fs->FileClose(&file);
     return;
   }
@@ -349,17 +438,43 @@ void MotionController::LoadMinuteAverageLog() {
   minuteAverageStart = 0;
   minuteAverageCount = 0;
   minuteAverageTotal = 0;
+  minuteHeartRateTotal = 0;
+  minuteHeartRateSampleCount = 0;
 
   size_t count = std::min(static_cast<size_t>(header.count), minuteAverageLogSize);
 
-  for (size_t i = 0; i < count; ++i) {
-    int32_t value = 0;
-    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
-      break;
+  if (header.version == 1) {
+    for (size_t i = 0; i < count; ++i) {
+      int32_t value = 0;
+      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
+        break;
+      }
+      minuteAccelerationAverages[i] = value;
+      minuteHeartRateAverages[i] = 0;
+      minuteAverageTotal += value;
+      minuteAverageCount++;
     }
-    minuteAverages[i] = value;
-    minuteAverageTotal += value;
-    minuteAverageCount++;
+  } else {
+    struct DiskEntry {
+      int32_t acceleration;
+      int32_t heartRate;
+    } entry {};
+
+    for (size_t i = 0; i < count; ++i) {
+      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+        break;
+      }
+      minuteAccelerationAverages[i] = entry.acceleration;
+      const int32_t clampedHeartRate = std::clamp<int32_t>(
+        entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+      minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+      minuteAverageTotal += entry.acceleration;
+      if (clampedHeartRate > 0) {
+        minuteHeartRateTotal += clampedHeartRate;
+        minuteHeartRateSampleCount++;
+      }
+      minuteAverageCount++;
+    }
   }
 
   fs->FileClose(&file);
