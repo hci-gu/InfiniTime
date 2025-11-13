@@ -1,6 +1,8 @@
 #include "components/heartrate/HeartRateController.h"
 #include <heartratetask/HeartRateTask.h>
 #include <systemtask/SystemTask.h>
+#include "components/motion/MotionController.h"
+#include <task.h>
 
 using namespace Pinetime::Controllers;
 
@@ -9,6 +11,10 @@ void HeartRateController::Update(HeartRateController::States newState, uint8_t h
   if (this->heartRate != heartRate) {
     this->heartRate = heartRate;
     service->OnNewHeartRateValue(heartRate);
+  }
+
+  if (motionController != nullptr && newState == States::Running && heartRate > 0) {
+    motionController->AddHeartRateSample(xTaskGetTickCount(), heartRate);
   }
 }
 
@@ -32,4 +38,8 @@ void HeartRateController::SetHeartRateTask(Pinetime::Applications::HeartRateTask
 
 void HeartRateController::SetService(Pinetime::Controllers::HeartRateService* service) {
   this->service = service;
+}
+
+void HeartRateController::SetMotionController(Pinetime::Controllers::MotionController* motionController) {
+  this->motionController = motionController;
 }

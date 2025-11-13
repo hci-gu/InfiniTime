@@ -63,6 +63,7 @@ namespace Pinetime {
       }
 
       int32_t AverageAccelerationLastMinute();
+      void AddHeartRateSample(TickType_t timestamp, uint16_t heartRate);
 
       DeviceTypes DeviceType() const {
         return deviceType;
@@ -86,6 +87,10 @@ namespace Pinetime {
       }
 
       int32_t LoggedMinutesAverage() const;
+      int32_t LoggedMinutesHeartRateAverage() const;
+      bool HasLoggedHeartRateAverage() const {
+        return minuteHeartRateSampleCount > 0;
+      }
 
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
@@ -103,15 +108,28 @@ namespace Pinetime {
         int32_t magnitude = 0;
       };
 
+      struct HeartRateSample {
+        TickType_t timestamp = 0;
+        uint16_t value = 0;
+      };
+
       void AddAccelerationSample(TickType_t timestamp, int32_t magnitude);
       void PruneOldAccelerationSamples(TickType_t currentTimestamp);
+      void PruneOldHeartRateSamplesLocked(TickType_t currentTimestamp);
 
       static constexpr size_t accelSamplesWindow = 600; // 10Hz * 60s
+      static constexpr size_t heartRateSamplesWindow = 600;
       std::array<AccelSample, accelSamplesWindow> accelSamples = {};
       size_t accelSampleHead = 0;
       size_t accelSampleTail = 0;
       size_t accelSampleCount = 0;
       int64_t accelSampleTotal = 0;
+
+      std::array<HeartRateSample, heartRateSamplesWindow> heartRateSamples = {};
+      size_t heartRateSampleHead = 0;
+      size_t heartRateSampleTail = 0;
+      size_t heartRateSampleCount = 0;
+      int64_t heartRateSampleTotal = 0;
 
       struct AccelStats {
         static constexpr uint8_t numHistory = 2;
@@ -143,16 +161,23 @@ namespace Pinetime {
 
       static constexpr size_t minuteAverageLogSize = 1440;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 1;
+      static constexpr uint32_t minuteAverageLogVersion = 2;
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 
       Pinetime::Controllers::FS* fs = nullptr;
 
-      std::array<int32_t, minuteAverageLogSize> minuteAverages = {};
+      struct MinuteAverageEntry {
+        int32_t acceleration = 0;
+        int32_t heartRate = 0;
+      };
+
+      std::array<MinuteAverageEntry, minuteAverageLogSize> minuteAverages = {};
       size_t minuteAverageStart = 0;
       size_t minuteAverageCount = 0;
       int64_t minuteAverageTotal = 0;
+      int64_t minuteHeartRateTotal = 0;
+      size_t minuteHeartRateSampleCount = 0;
       TickType_t lastLoggedMinuteTick = 0;
       bool minuteAverageDirty = false;
       bool storageAccessible = true;
@@ -160,9 +185,10 @@ namespace Pinetime {
       void LoadMinuteAverageLog();
       void SaveMinuteAverageLog();
       void EnsureLogDirectory();
-      void AppendMinuteAverage(int32_t average);
+      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
+      int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
       void MaybePersistMinuteAverageLog();
     };
   }

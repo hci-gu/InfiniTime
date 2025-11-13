@@ -14,7 +14,8 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
   averageLabel = lv_label_create(lv_scr_act(), nullptr);
   lv_obj_set_style_local_text_font(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &jetbrains_mono_42);
   lv_obj_set_style_local_text_color(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-  lv_label_set_text_static(averageLabel, "Avg: 0 mg");
+  lv_label_set_text_static(averageLabel, "Avg accel: 0 mg\nAvg HR: -- bpm");
+  lv_label_set_align(averageLabel, LV_LABEL_ALIGN_CENTER);
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
 
   Refresh();
@@ -32,7 +33,15 @@ void AccelerometerAverage::Refresh() {
   auto storedMinutes = motionController.LoggedMinuteCount();
   lv_label_set_text_fmt(countLabel, "Minutes stored: %lu", static_cast<unsigned long>(storedMinutes));
 
-  auto average = motionController.LoggedMinutesAverage();
-  lv_label_set_text_fmt(averageLabel, "Avg: %ld mg", static_cast<long>(average));
+  auto accelAverage = motionController.LoggedMinutesAverage();
+  if (motionController.HasLoggedHeartRateAverage()) {
+    auto heartRateAverage = motionController.LoggedMinutesHeartRateAverage();
+    lv_label_set_text_fmt(averageLabel,
+                          "Avg accel: %ld mg\nAvg HR: %ld bpm",
+                          static_cast<long>(accelAverage),
+                          static_cast<long>(heartRateAverage));
+  } else {
+    lv_label_set_text_fmt(averageLabel, "Avg accel: %ld mg\nAvg HR: -- bpm", static_cast<long>(accelAverage));
+  }
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
 }
