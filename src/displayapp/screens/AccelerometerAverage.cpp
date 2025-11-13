@@ -4,6 +4,18 @@
 
 using namespace Pinetime::Applications::Screens;
 
+namespace {
+  void DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t event) {
+    if (event != LV_EVENT_CLICKED) {
+      return;
+    }
+
+    auto* screen = static_cast<AccelerometerAverage*>(obj->user_data);
+    screen->DeleteLoggedMinutes();
+  }
+}
+
+
 AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController)
   : motionController {motionController} {
   countLabel = lv_label_create(lv_scr_act(), nullptr);
@@ -17,6 +29,14 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
   lv_label_set_text_static(averageLabel, "Avg accel: 0 mg\nAvg HR: -- bpm");
   lv_label_set_align(averageLabel, LV_LABEL_ALIGN_CENTER);
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
+
+  deleteButton = lv_btn_create(lv_scr_act(), nullptr);
+  deleteButton->user_data = this;
+  lv_obj_set_event_cb(deleteButton, DeleteButtonEventHandler);
+  lv_obj_set_size(deleteButton, 190, 50);
+  lv_obj_align(deleteButton, lv_scr_act(), LV_ALIGN_IN_BOTTOM_MID, 0, -10);
+  deleteButtonLabel = lv_label_create(deleteButton, nullptr);
+  lv_label_set_text_static(deleteButtonLabel, "Delete stored minutes");
 
   Refresh();
   taskRefresh = lv_task_create(RefreshTaskCallback, 1000, LV_TASK_PRIO_MID, this);
@@ -44,4 +64,9 @@ void AccelerometerAverage::Refresh() {
     lv_label_set_text_fmt(averageLabel, "Avg accel: %ld mg\nAvg HR: -- bpm", static_cast<long>(accelAverage));
   }
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
+}
+
+void AccelerometerAverage::DeleteLoggedMinutes() {
+  motionController.ClearMinuteAverageLog();
+  Refresh();
 }

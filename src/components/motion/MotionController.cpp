@@ -108,6 +108,18 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
   return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
+void MotionController::ClearMinuteAverageLog() {
+  minuteAverageStart = 0;
+  minuteAverageCount = 0;
+  minuteAverageTotal = 0;
+  minuteHeartRateTotal = 0;
+  minuteHeartRateSampleCount = 0;
+  std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
+  std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
+  minuteAverageDirty = true;
+  MaybePersistMinuteAverageLog();
+}
+
 MotionController::AccelStats MotionController::GetAccelStats() const {
   AccelStats stats;
 
