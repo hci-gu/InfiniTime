@@ -164,15 +164,9 @@ void NimbleController::StartAdvertising() {
   fields.uuids16 = &HeartRateService::heartRateServiceUuid;
   fields.num_uuids16 = 1;
   fields.uuids16_is_complete = 1;
-  std::array<ble_uuid128_t, 2> advUuids {};
+  std::array<ble_uuid128_t, 1> advUuids {};
   advUuids[0] = DfuService::serviceUuid;
-  bool includeMinuteService = minuteDataService.ShouldAdvertise();
-  if (includeMinuteService) {
-    advUuids[1] = MinuteDataService::ServiceUuid();
-    fields.num_uuids128 = 2;
-  } else {
-    fields.num_uuids128 = 1;
-  }
+  fields.num_uuids128 = advUuids.size();
   fields.uuids128 = advUuids.data();
   fields.uuids128_is_complete = 1;
   fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
@@ -180,6 +174,14 @@ void NimbleController::StartAdvertising() {
   rsp_fields.name = reinterpret_cast<const uint8_t*>(deviceName);
   rsp_fields.name_len = strlen(deviceName);
   rsp_fields.name_is_complete = 1;
+  bool includeMinuteService = minuteDataService.ShouldAdvertise();
+  std::array<ble_uuid128_t, 1> rspUuids {};
+  if (includeMinuteService) {
+    rspUuids[0] = MinuteDataService::ServiceUuid();
+    rsp_fields.uuids128 = rspUuids.data();
+    rsp_fields.num_uuids128 = rspUuids.size();
+    rsp_fields.uuids128_is_complete = 1;
+  }
 
   int rc;
   rc = ble_gap_adv_set_fields(&fields);
