@@ -73,10 +73,17 @@ MinuteDataService::MinuteDataService(NimbleController& nimble,
                               {0}},
     serviceDefinition {{.type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &ServiceUuid().u, .characteristics = characteristicDefinition},
                        {0}} {
-  ble_npl_callout_init(&sendCallout, nimble_port_get_dflt_eventq(), SendCalloutCallback, this);
 }
 
 void MinuteDataService::Init() {
+  if (!calloutInitialized) {
+    auto* eventQueue = nimble_port_get_dflt_eventq();
+    if (eventQueue != nullptr) {
+      ble_npl_callout_init(&sendCallout, eventQueue, SendCalloutCallback, this);
+      calloutInitialized = true;
+    }
+  }
+
   int res = ble_gatts_count_cfg(serviceDefinition);
   ASSERT(res == 0);
   res = ble_gatts_add_svcs(serviceDefinition);
@@ -301,7 +308,9 @@ void MinuteDataService::HandleAbort() {
     return;
   }
 
-  ble_npl_callout_stop(&sendCallout);
+  if (calloutInitialized) {
+    ble_npl_callout_stop(&sendCallout);
+  }
   NRF_LOG_INFO("Minute data transfer aborted");
   transferState = TransferState::Idle;
   nextSequence = 1;
@@ -350,6 +359,10 @@ bool MinuteDataService::CanStream() const {
 
 void MinuteDataService::ScheduleNextChunk() {
   if (!CanStream()) {
+    return;
+  }
+
+  if (!calloutInitialized) {
     return;
   }
 

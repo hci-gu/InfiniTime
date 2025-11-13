@@ -91,7 +91,8 @@ namespace Pinetime {
       uint16_t lastSentSequence = 0;
       uint16_t connectionHandle = BLE_HS_CONN_HANDLE_NONE;
 
-      ble_npl_callout sendCallout;
+      ble_npl_callout sendCallout {};
+      bool calloutInitialized = false;
       std::unique_ptr<MotionController::MinuteSample[]> transferBuffer;
       size_t transferBufferCapacity = 0;
       std::array<uint8_t, 244> notifyBuffer {};
