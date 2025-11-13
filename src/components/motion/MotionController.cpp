@@ -50,7 +50,11 @@ MotionController::MinuteLogLock::~MinuteLogLock() {
 
 void MotionController::InitializeMinuteLogMutex() {
   if (minuteLogMutex == nullptr) {
+#if (configSUPPORT_STATIC_ALLOCATION == 1)
     minuteLogMutex = xSemaphoreCreateMutexStatic(&minuteLogMutexBuffer);
+#else
+    minuteLogMutex = xSemaphoreCreateMutex();
+#endif
   }
 }
 

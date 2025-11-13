@@ -199,7 +199,7 @@ void MinuteDataService::HandleHandshake(uint16_t conn_handle, const uint8_t* dat
   peerMtu = ReadLe16(&data[2]);
   MinuteDataProtocol::HandshakeResponse response;
   response.sampleSize = sizeof(MinuteDataProtocol::DataSamplePayload);
-  response.maxWindow = MotionController::minuteAverageLogSize;
+  response.maxWindow = MotionController::MinuteLogCapacity;
   response.flags = 0;
   SendControlResponse(reinterpret_cast<const uint8_t*>(&response), sizeof(response));
 

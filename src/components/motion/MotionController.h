@@ -102,6 +102,8 @@ namespace Pinetime {
         uint8_t flags = 0;
       };
 
+      static constexpr size_t MinuteLogCapacity = 1440;
+
       enum MinuteSampleFlags : uint8_t {
         SampleFlagNone = 0,
         SampleFlagMissingHeartRate = 1u << 0,
@@ -191,7 +193,7 @@ namespace Pinetime {
       DeviceTypes deviceType = DeviceTypes::Unknown;
       Pinetime::Controllers::MotionService* service = nullptr;
 
-      static constexpr size_t minuteAverageLogSize = 1440;
+      static constexpr size_t minuteAverageLogSize = MinuteLogCapacity;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
       static constexpr uint32_t minuteAverageLogVersion = 3;
       static constexpr const char minuteAverageDirectory[] = "/.system";
