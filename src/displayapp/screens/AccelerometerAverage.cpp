@@ -13,9 +13,8 @@ using namespace Pinetime::Applications::Screens;
 using namespace Pinetime::Controllers;
 
 
-AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController,
-                                           Controllers::DateTime& dateTimeController)
-  : motionController {motionController}, dateTimeController {dateTimeController} {
+AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController)
+  : motionController {motionController} {
   countLabel = lv_label_create(lv_scr_act(), nullptr);
   lv_label_set_text_static(countLabel, "Minutes stored: 0");
   lv_obj_set_style_local_text_color(countLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
@@ -55,6 +54,13 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
   taskRefresh = lv_task_create(RefreshTaskCallback, 1000, LV_TASK_PRIO_MID, this);
 }
 
+AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController,
+                                           Controllers::DateTime& dateTimeController)
+  : AccelerometerAverage(motionController) {
+  this->dateTimeController = &dateTimeController;
+  Refresh();
+}
+
 AccelerometerAverage::~AccelerometerAverage() {
   if (taskRefresh != nullptr) {
     lv_task_del(taskRefresh);
@@ -89,7 +95,11 @@ void AccelerometerAverage::UpdateRecentHistory() {
   std::array<MotionController::LoggedMinuteEntry, historyEntryCount> recentMinutes {};
   const auto available = motionController.GetRecentLoggedMinutes(recentMinutes);
   const auto nowTicks = xTaskGetTickCount();
-  const auto nowDateTime = dateTimeController.CurrentDateTime();
+  auto nowDateTime = std::chrono::system_clock::time_point {};
+  const bool hasDateTime = dateTimeController != nullptr;
+  if (hasDateTime) {
+    nowDateTime = dateTimeController->CurrentDateTime();
+  }
 
   for (size_t i = 0; i < historyLabels.size(); ++i) {
     if (historyLabels[i] == nullptr) {
@@ -107,10 +117,18 @@ void AccelerometerAverage::UpdateRecentHistory() {
     }
 
     const auto& entry = recentMinutes[i];
-    const TickType_t tickDelta = nowTicks - entry.timestamp;
-    auto entryTime = nowDateTime - std::chrono::seconds(tickDelta / configTICK_RATE_HZ);
-    auto entryTimeT = std::chrono::system_clock::to_time_t(entryTime);
-    auto entryTm = *std::localtime(&entryTimeT);
+    uint8_t hours = 0;
+    uint8_t minutes = 0;
+    char timeBuffer[8] = "--:--";
+    if (hasDateTime) {
+      const TickType_t tickDelta = nowTicks - entry.timestamp;
+      auto entryTime = nowDateTime - std::chrono::seconds(tickDelta / configTICK_RATE_HZ);
+      auto entryTimeT = std::chrono::system_clock::to_time_t(entryTime);
+      auto entryTm = *std::localtime(&entryTimeT);
+      hours = entryTm.tm_hour;
+      minutes = entryTm.tm_min;
+      snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d", hours, minutes);
+    }
 
     char heartRateBuffer[12];
     if (entry.heartRate > 0) {
@@ -120,9 +138,8 @@ void AccelerometerAverage::UpdateRecentHistory() {
     }
 
     lv_label_set_text_fmt(historyLabels[i],
-                          "%02d:%02d   %s   %ld mg",
-                          entryTm.tm_hour,
-                          entryTm.tm_min,
+                          "%s   %s   %ld mg",
+                          timeBuffer,
                           heartRateBuffer,
                           static_cast<long>(entry.acceleration));
 

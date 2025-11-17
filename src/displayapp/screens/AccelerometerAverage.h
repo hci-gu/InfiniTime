@@ -15,15 +15,16 @@ namespace Pinetime {
 
       class AccelerometerAverage : public Screen {
       public:
-        explicit AccelerometerAverage(Controllers::MotionController& motionController,
-                                     Controllers::DateTime& dateTimeController);
+        explicit AccelerometerAverage(Controllers::MotionController& motionController);
+        AccelerometerAverage(Controllers::MotionController& motionController,
+                             Controllers::DateTime& dateTimeController);
         ~AccelerometerAverage() override;
 
         void Refresh() override;
 
       private:
         Controllers::MotionController& motionController;
-        Controllers::DateTime& dateTimeController;
+        Controllers::DateTime* dateTimeController = nullptr;
         lv_obj_t* countLabel = nullptr;
         lv_obj_t* averageLabel = nullptr;
         lv_obj_t* historyTitleLabel = nullptr;
