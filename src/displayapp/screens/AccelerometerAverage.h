@@ -21,7 +21,7 @@ namespace Pinetime {
       private:
         Controllers::MotionController& motionController;
         lv_obj_t* countLabel = nullptr;
-        lv_obj_t* averageLabel = nullptr;
+        lv_obj_t* historyTable = nullptr;
         lv_obj_t* deleteButton = nullptr;
         lv_obj_t* deleteButtonLabel = nullptr;
         lv_task_t* taskRefresh = nullptr;

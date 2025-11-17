@@ -138,7 +138,7 @@ void SystemTask::Work() {
   twiMaster.Init();
 
   motionSensor.Init();
-  motionController.Init(motionSensor.DeviceType(), fs);
+  motionController.Init(motionSensor.DeviceType(), fs, dateTimeController);
   settingsController.Init();
 
   displayApp.Register(this);

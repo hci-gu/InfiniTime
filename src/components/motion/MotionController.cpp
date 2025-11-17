@@ -1,10 +1,12 @@
 #include "components/motion/MotionController.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <task.h>
 
+#include "components/datetime/DateTimeController.h"
 #include "utility/Math.h"
 
 using namespace Pinetime::Controllers;
@@ -108,12 +110,26 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
   return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
+bool MotionController::GetLoggedMinute(size_t indexFromNewest, LoggedMinute& entry) const {
+  if (indexFromNewest >= minuteAverageCount) {
+    return false;
+  }
+
+  const size_t newestIndex = (minuteAverageStart + minuteAverageCount - 1 - indexFromNewest + minuteAverageLogSize) %
+                             minuteAverageLogSize;
+  entry.acceleration = minuteAccelerationAverages[newestIndex];
+  entry.heartRate = minuteHeartRateAverages[newestIndex];
+  entry.timeMinutes = minuteAverageTimes[newestIndex];
+  return true;
+}
+
 void MotionController::ClearMinuteAverageLog() {
   minuteAverageStart = 0;
   minuteAverageCount = 0;
   minuteAverageTotal = 0;
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
+  std::fill(minuteAverageTimes.begin(), minuteAverageTimes.end(), UnknownLoggedMinuteTime);
   std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
   std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
   minuteAverageDirty = true;
@@ -187,7 +203,9 @@ bool MotionController::ShouldLowerSleep() const {
   return true;
 }
 
-void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fsController) {
+void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types,
+                            Pinetime::Controllers::FS& fsController,
+                            Pinetime::Controllers::DateTime& dateTime) {
   switch (types) {
     case Drivers::Bma421::DeviceTypes::BMA421:
       this->deviceType = DeviceTypes::BMA421;
@@ -201,6 +219,7 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pineti
   }
 
   fs = &fsController;
+  dateTimeController = &dateTime;
   storageAccessible = true;
   LoadMinuteAverageLog();
   lastLoggedMinuteTick = xTaskGetTickCount();
@@ -338,11 +357,22 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
-  AppendMinuteAverage(accelerationAverage, heartRateAverage);
+  uint16_t timeMinutes = UnknownLoggedMinuteTime;
+  if (dateTimeController != nullptr) {
+    auto now = dateTimeController->CurrentDateTime();
+    auto minutesSinceEpoch = std::chrono::duration_cast<std::chrono::minutes>(now.time_since_epoch()).count();
+    if (minutesSinceEpoch >= 0) {
+      timeMinutes = static_cast<uint16_t>(minutesSinceEpoch % 1440);
+    }
+  }
+
+  AppendMinuteAverage(accelerationAverage, heartRateAverage, timeMinutes);
   lastLoggedMinuteTick = timestamp;
 }
 
-void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
+void MotionController::AppendMinuteAverage(int32_t accelerationAverage,
+                                           int32_t heartRateAverage,
+                                           uint16_t timeMinutes) {
   const int32_t clampedHeartRate = std::clamp<int32_t>(
     heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
@@ -351,6 +381,7 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
     minuteAccelerationAverages[index] = accelerationAverage;
     minuteHeartRateAverages[index] = storedHeartRate;
+    minuteAverageTimes[index] = timeMinutes;
     minuteAverageCount++;
   } else {
     const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
@@ -362,6 +393,7 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     }
     minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
     minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
+    minuteAverageTimes[minuteAverageStart] = timeMinutes;
     minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
   }
 
@@ -410,11 +442,13 @@ void MotionController::SaveMinuteAverageLog() {
   struct DiskEntry {
     int32_t acceleration;
     int32_t heartRate;
+    uint16_t timeMinutes;
+    uint16_t reserved;
   };
 
   for (size_t i = 0; i < minuteAverageCount; ++i) {
     size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
+    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index], minuteAverageTimes[index], 0};
     fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
   }
 
@@ -442,7 +476,7 @@ void MotionController::LoadMinuteAverageLog() {
     return;
   }
 
-  if (header.version != minuteAverageLogVersion && header.version != 1) {
+  if (header.version != minuteAverageLogVersion && header.version != 1 && header.version != 2) {
     fs->FileClose(&file);
     return;
   }
@@ -463,11 +497,12 @@ void MotionController::LoadMinuteAverageLog() {
       }
       minuteAccelerationAverages[i] = value;
       minuteHeartRateAverages[i] = 0;
+      minuteAverageTimes[i] = UnknownLoggedMinuteTime;
       minuteAverageTotal += value;
       minuteAverageCount++;
     }
-  } else {
-    struct DiskEntry {
+  } else if (header.version == 2) {
+    struct DiskEntryV2 {
       int32_t acceleration;
       int32_t heartRate;
     } entry {};
@@ -480,6 +515,31 @@ void MotionController::LoadMinuteAverageLog() {
       const int32_t clampedHeartRate = std::clamp<int32_t>(
         entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
       minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+      minuteAverageTimes[i] = UnknownLoggedMinuteTime;
+      minuteAverageTotal += entry.acceleration;
+      if (clampedHeartRate > 0) {
+        minuteHeartRateTotal += clampedHeartRate;
+        minuteHeartRateSampleCount++;
+      }
+      minuteAverageCount++;
+    }
+  } else {
+    struct DiskEntry {
+      int32_t acceleration;
+      int32_t heartRate;
+      uint16_t timeMinutes;
+      uint16_t reserved;
+    } entry {};
+
+    for (size_t i = 0; i < count; ++i) {
+      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+        break;
+      }
+      minuteAccelerationAverages[i] = entry.acceleration;
+      const int32_t clampedHeartRate = std::clamp<int32_t>(
+        entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+      minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+      minuteAverageTimes[i] = entry.timeMinutes;
       minuteAverageTotal += entry.acceleration;
       if (clampedHeartRate > 0) {
         minuteHeartRateTotal += clampedHeartRate;

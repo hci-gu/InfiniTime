@@ -12,12 +12,14 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
   lv_obj_set_style_local_text_color(countLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
   lv_obj_align(countLabel, lv_scr_act(), LV_ALIGN_IN_TOP_MID, 0, 10);
 
-  averageLabel = lv_label_create(lv_scr_act(), nullptr);
-  lv_obj_set_style_local_text_font(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &jetbrains_mono_42);
-  lv_obj_set_style_local_text_color(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
-  lv_label_set_text_static(averageLabel, "Avg accel: 0 mg\nAvg HR: -- bpm");
-  lv_label_set_align(averageLabel, LV_LABEL_ALIGN_CENTER);
-  lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
+  historyTable = lv_table_create(lv_scr_act(), nullptr);
+  lv_table_set_col_cnt(historyTable, 3);
+  lv_table_set_col_width(historyTable, 0, 70);
+  lv_table_set_col_width(historyTable, 1, 80);
+  lv_table_set_col_width(historyTable, 2, 70);
+  lv_table_set_row_cnt(historyTable, 1);
+  lv_obj_set_size(historyTable, 220, 150);
+  lv_obj_align(historyTable, lv_scr_act(), LV_ALIGN_IN_TOP_MID, 0, 40);
 
   deleteButton = lv_btn_create(lv_scr_act(), nullptr);
   deleteButton->user_data = this;
@@ -42,17 +44,34 @@ void AccelerometerAverage::Refresh() {
   auto storedMinutes = motionController.LoggedMinuteCount();
   lv_label_set_text_fmt(countLabel, "Minutes stored: %lu", static_cast<unsigned long>(storedMinutes));
 
-  auto accelAverage = motionController.LoggedMinutesAverage();
-  if (motionController.HasLoggedHeartRateAverage()) {
-    auto heartRateAverage = motionController.LoggedMinutesHeartRateAverage();
-    lv_label_set_text_fmt(averageLabel,
-                          "Avg accel: %ld mg\nAvg HR: %ld bpm",
-                          static_cast<long>(accelAverage),
-                          static_cast<long>(heartRateAverage));
-  } else {
-    lv_label_set_text_fmt(averageLabel, "Avg accel: %ld mg\nAvg HR: -- bpm", static_cast<long>(accelAverage));
+  lv_table_set_row_cnt(historyTable, static_cast<uint16_t>(storedMinutes + 1));
+  lv_table_set_cell_value(historyTable, 0, 0, "Time");
+  lv_table_set_cell_value(historyTable, 0, 1, "Accel");
+  lv_table_set_cell_value(historyTable, 0, 2, "HR");
+
+  for (size_t i = 0; i < storedMinutes; ++i) {
+    Controllers::MotionController::LoggedMinute entry {};
+    if (!motionController.GetLoggedMinute(i, entry)) {
+      lv_table_set_row_cnt(historyTable, static_cast<uint16_t>(i + 1));
+      break;
+    }
+
+    const uint16_t rowIndex = static_cast<uint16_t>(i + 1);
+    if (entry.timeMinutes != Controllers::MotionController::UnknownLoggedMinuteTime) {
+      const auto hours = entry.timeMinutes / 60;
+      const auto minutes = entry.timeMinutes % 60;
+      lv_table_set_cell_value_fmt(historyTable, rowIndex, 0, "%02u:%02u", hours, minutes);
+    } else {
+      lv_table_set_cell_value(historyTable, rowIndex, 0, "--:--");
+    }
+    lv_table_set_cell_value_fmt(historyTable, rowIndex, 1, "%ld", static_cast<long>(entry.acceleration));
+
+    if (entry.heartRate > 0) {
+      lv_table_set_cell_value_fmt(historyTable, rowIndex, 2, "%d", entry.heartRate);
+    } else {
+      lv_table_set_cell_value(historyTable, rowIndex, 2, "--");
+    }
   }
-  lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
 }
 
 void AccelerometerAverage::DeleteLoggedMinutes() {

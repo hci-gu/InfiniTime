@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include <FreeRTOS.h>
@@ -12,6 +13,8 @@
 
 namespace Pinetime {
   namespace Controllers {
+    class DateTime;
+
     class MotionController {
     public:
       enum class DeviceTypes {
@@ -69,7 +72,9 @@ namespace Pinetime {
         return deviceType;
       }
 
-      void Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fs);
+      void Init(Pinetime::Drivers::Bma421::DeviceTypes types,
+                Pinetime::Controllers::FS& fs,
+                Pinetime::Controllers::DateTime& dateTimeController);
 
       void OnStorageWake();
       void OnStorageSleep();
@@ -91,6 +96,15 @@ namespace Pinetime {
       bool HasLoggedHeartRateAverage() const {
         return minuteHeartRateSampleCount > 0;
       }
+
+      struct LoggedMinute {
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+        uint16_t timeMinutes = 0xffff;
+      };
+
+      static constexpr uint16_t UnknownLoggedMinuteTime = 0xffff;
+      bool GetLoggedMinute(size_t indexFromNewest, LoggedMinute& entry) const;
 
       void ClearMinuteAverageLog();
 
@@ -166,7 +180,7 @@ namespace Pinetime {
 
       static constexpr size_t minuteAverageLogSize = 1440;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 2;
+      static constexpr uint32_t minuteAverageLogVersion = 3;
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 
@@ -174,6 +188,7 @@ namespace Pinetime {
 
       std::array<int32_t, minuteAverageLogSize> minuteAccelerationAverages = {};
       std::array<int16_t, minuteAverageLogSize> minuteHeartRateAverages = {};
+      std::array<uint16_t, minuteAverageLogSize> minuteAverageTimes = {};
       size_t minuteAverageStart = 0;
       size_t minuteAverageCount = 0;
       int64_t minuteAverageTotal = 0;
@@ -182,11 +197,12 @@ namespace Pinetime {
       TickType_t lastLoggedMinuteTick = 0;
       bool minuteAverageDirty = false;
       bool storageAccessible = true;
+      Pinetime::Controllers::DateTime* dateTimeController = nullptr;
 
       void LoadMinuteAverageLog();
       void SaveMinuteAverageLog();
       void EnsureLogDirectory();
-      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage);
+      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage, uint16_t timeMinutes);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
