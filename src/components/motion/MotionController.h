@@ -92,6 +92,21 @@ namespace Pinetime {
         return minuteHeartRateSampleCount > 0;
       }
 
+      struct LoggedMinuteEntry {
+        uint8_t hour = 0;
+        uint8_t minute = 0;
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+      };
+
+      struct LoggedMinutes {
+        static constexpr size_t maxEntries = 3;
+        size_t count = 0;
+        std::array<LoggedMinuteEntry, maxEntries> entries = {};
+      };
+
+      LoggedMinutes GetRecentLoggedMinutes(size_t maxCount = LoggedMinutes::maxEntries) const;
+
       void ClearMinuteAverageLog();
 
     private:

@@ -17,7 +17,23 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
   lv_obj_set_style_local_text_color(averageLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
   lv_label_set_text_static(averageLabel, "Avg accel: 0 mg\nAvg HR: -- bpm");
   lv_label_set_align(averageLabel, LV_LABEL_ALIGN_CENTER);
-  lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_align(averageLabel, countLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+
+  historyHeaderLabel = lv_label_create(lv_scr_act(), nullptr);
+  lv_label_set_text_static(historyHeaderLabel, "Time    HR    Accel");
+  lv_obj_set_style_local_text_color(historyHeaderLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
+  lv_obj_align(historyHeaderLabel, averageLabel, LV_ALIGN_OUT_BOTTOM_LEFT, -60, 10);
+
+  for (size_t i = 0; i < historyLabels.size(); ++i) {
+    historyLabels[i] = lv_label_create(lv_scr_act(), nullptr);
+    lv_obj_set_style_local_text_color(historyLabels[i], LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
+    lv_label_set_text_static(historyLabels[i], "--:--  HR:--  ACC:-- mg");
+    if (i == 0) {
+      lv_obj_align(historyLabels[i], historyHeaderLabel, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 5);
+    } else {
+      lv_obj_align(historyLabels[i], historyLabels[i - 1], LV_ALIGN_OUT_BOTTOM_LEFT, 0, 5);
+    }
+  }
 
   deleteButton = lv_btn_create(lv_scr_act(), nullptr);
   deleteButton->user_data = this;
@@ -52,7 +68,30 @@ void AccelerometerAverage::Refresh() {
   } else {
     lv_label_set_text_fmt(averageLabel, "Avg accel: %ld mg\nAvg HR: -- bpm", static_cast<long>(accelAverage));
   }
-  lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_align(averageLabel, countLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+
+  auto recentMinutes = motionController.GetRecentLoggedMinutes(historyLabels.size());
+  for (size_t i = 0; i < historyLabels.size(); ++i) {
+    if (i < recentMinutes.count) {
+      const auto& entry = recentMinutes.entries[i];
+      if (entry.heartRate > 0) {
+        lv_label_set_text_fmt(historyLabels[i],
+                              "%02u:%02u  HR:%ld bpm  ACC:%ld mg",
+                              static_cast<unsigned int>(entry.hour),
+                              static_cast<unsigned int>(entry.minute),
+                              static_cast<long>(entry.heartRate),
+                              static_cast<long>(entry.acceleration));
+      } else {
+        lv_label_set_text_fmt(historyLabels[i],
+                              "%02u:%02u  HR:--    ACC:%ld mg",
+                              static_cast<unsigned int>(entry.hour),
+                              static_cast<unsigned int>(entry.minute),
+                              static_cast<long>(entry.acceleration));
+      }
+    } else {
+      lv_label_set_text_static(historyLabels[i], "--:--  HR:--  ACC:-- mg");
+    }
+  }
 }
 
 void AccelerometerAverage::DeleteLoggedMinutes() {
