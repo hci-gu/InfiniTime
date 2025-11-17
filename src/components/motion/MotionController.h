@@ -86,11 +86,18 @@ namespace Pinetime {
         return minuteAverageCount;
       }
 
+      struct MinuteLogEntry {
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+      };
+
       int32_t LoggedMinutesAverage() const;
       int32_t LoggedMinutesHeartRateAverage() const;
       bool HasLoggedHeartRateAverage() const {
         return minuteHeartRateSampleCount > 0;
       }
+
+      MinuteLogEntry LoggedMinuteAt(size_t index) const;
 
       void ClearMinuteAverageLog();
 

@@ -108,6 +108,18 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
   return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
+MotionController::MinuteLogEntry MotionController::LoggedMinuteAt(size_t index) const {
+  MinuteLogEntry entry {};
+  if (index >= minuteAverageCount) {
+    return entry;
+  }
+
+  size_t bufferIndex = (minuteAverageStart + index) % minuteAverageLogSize;
+  entry.acceleration = minuteAccelerationAverages[bufferIndex];
+  entry.heartRate = minuteHeartRateAverages[bufferIndex];
+  return entry;
+}
+
 void MotionController::ClearMinuteAverageLog() {
   minuteAverageStart = 0;
   minuteAverageCount = 0;
