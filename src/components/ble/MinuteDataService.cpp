@@ -7,6 +7,7 @@
 #include <new>
 
 #include <host/ble_hs.h>
+#include <host/ble_att.h>
 #include <nimble/nimble_port.h>
 #include <nrf_log.h>
 
@@ -66,8 +67,8 @@ MinuteDataService::MinuteDataService(NimbleController& nimble,
                                .flags = BLE_GATT_CHR_F_READ,
                                .val_handle = &statusHandle},
                               {.uuid = &dataCharUuid.u,
-                               .access_cb = nullptr,
-                               .arg = nullptr,
+                               .access_cb = DataCallback,
+                               .arg = this,
                                .flags = BLE_GATT_CHR_F_NOTIFY,
                                .val_handle = &dataHandle},
                               {0}},
@@ -122,6 +123,18 @@ int MinuteDataService::StatusCallback(uint16_t conn_handle,
   (void)conn_handle;
   (void)attr_handle;
   return service->OnStatusAccess(ctxt);
+}
+
+int MinuteDataService::DataCallback(uint16_t conn_handle,
+                                    uint16_t attr_handle,
+                                    ble_gatt_access_ctxt* ctxt,
+                                    void* arg) {
+  (void)conn_handle;
+  (void)attr_handle;
+  (void)ctxt;
+  (void)arg;
+  // Data characteristic is notify-only; deny direct reads/writes.
+  return BLE_ATT_ERR_READ_NOT_PERMITTED;
 }
 
 int MinuteDataService::OnControlAccess(uint16_t conn_handle,

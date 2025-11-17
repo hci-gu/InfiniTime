@@ -397,8 +397,7 @@ syscfg.defs:
             that can be persisted.  Note: increasing this value may also
             require increasing the capacity of the underlying storage
             mechanism.
-
-        value: 8
+        value: 12
 
     BLE_MESH:
         description: >

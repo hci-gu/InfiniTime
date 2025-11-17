@@ -67,6 +67,7 @@ namespace Pinetime {
 
       static int ControlCallback(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
       static int StatusCallback(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
+      static int DataCallback(uint16_t conn_handle, uint16_t attr_handle, ble_gatt_access_ctxt* ctxt, void* arg);
       static void SendCalloutCallback(ble_npl_event* event);
 
       NimbleController& nimble;

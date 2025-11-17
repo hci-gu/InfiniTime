@@ -747,7 +747,7 @@
 #endif
 
 #ifndef MYNEWT_VAL_BLE_STORE_MAX_CCCDS
-#define MYNEWT_VAL_BLE_STORE_MAX_CCCDS (8)
+#define MYNEWT_VAL_BLE_STORE_MAX_CCCDS (12)
 #endif
 
 /*** @apache-mynewt-nimble/nimble/host/services/ans */
