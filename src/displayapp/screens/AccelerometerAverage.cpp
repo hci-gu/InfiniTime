@@ -92,12 +92,14 @@ void AccelerometerAverage::DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t ev
 }
 
 namespace {
+  using LoggedMinute = Pinetime::Controllers::MotionController::LoggedMinute;
+  constexpr auto UnknownLoggedMinuteTime = Pinetime::Controllers::MotionController::UnknownLoggedMinuteTime;
   constexpr const char headerText[] = "Time   Accel   HR\n";
   constexpr const char emptyHistoryText[] = "No logged minutes yet\n";
 
-  size_t LoggedMinuteLineLength(const Controllers::MotionController::LoggedMinute& entry) {
+  size_t LoggedMinuteLineLength(const LoggedMinute& entry) {
     const auto acceleration = static_cast<long>(entry.acceleration);
-    if (entry.timeMinutes != Controllers::MotionController::UnknownLoggedMinuteTime) {
+    if (entry.timeMinutes != UnknownLoggedMinuteTime) {
       const auto hours = entry.timeMinutes / 60;
       const auto minutes = entry.timeMinutes % 60;
       if (entry.heartRate > 0) {
@@ -131,14 +133,14 @@ namespace {
   size_t WriteLoggedMinuteLine(char* buffer,
                                size_t capacity,
                                size_t offset,
-                               const Controllers::MotionController::LoggedMinute& entry) {
+                               const LoggedMinute& entry) {
     if (offset >= capacity) {
       return capacity;
     }
     const size_t remaining = capacity - offset;
     const auto acceleration = static_cast<long>(entry.acceleration);
     int written = 0;
-    if (entry.timeMinutes != Controllers::MotionController::UnknownLoggedMinuteTime) {
+    if (entry.timeMinutes != UnknownLoggedMinuteTime) {
       const auto hours = entry.timeMinutes / 60;
       const auto minutes = entry.timeMinutes % 60;
       if (entry.heartRate > 0) {
