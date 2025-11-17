@@ -1,8 +1,16 @@
 #include "displayapp/screens/AccelerometerAverage.h"
 
+#include <FreeRTOS.h>
+#include <array>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
+#include <task.h>
+
 #include "displayapp/InfiniTimeTheme.h"
 
 using namespace Pinetime::Applications::Screens;
+using namespace Pinetime::Controllers;
 
 
 AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController)
@@ -19,6 +27,21 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
   lv_label_set_align(averageLabel, LV_LABEL_ALIGN_CENTER);
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
 
+  historyTitleLabel = lv_label_create(lv_scr_act(), nullptr);
+  lv_obj_set_style_local_text_color(historyTitleLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
+  lv_label_set_text_static(historyTitleLabel, "Latest minutes (HH:MM  HR  Accel)");
+  lv_obj_align(historyTitleLabel, averageLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
+
+  for (size_t i = 0; i < historyLabels.size(); ++i) {
+    historyLabels[i] = lv_label_create(lv_scr_act(), nullptr);
+    lv_label_set_text(historyLabels[i], "--:--   -- bpm   -- mg");
+    if (i == 0) {
+      lv_obj_align(historyLabels[i], historyTitleLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+    } else {
+      lv_obj_align(historyLabels[i], historyLabels[i - 1], LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+    }
+  }
+
   deleteButton = lv_btn_create(lv_scr_act(), nullptr);
   deleteButton->user_data = this;
   lv_obj_set_event_cb(deleteButton, DeleteButtonEventHandler);
@@ -29,6 +52,13 @@ AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motion
 
   Refresh();
   taskRefresh = lv_task_create(RefreshTaskCallback, 1000, LV_TASK_PRIO_MID, this);
+}
+
+AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController,
+                                           Controllers::DateTime& dateTimeController)
+  : AccelerometerAverage(motionController) {
+  this->dateTimeController = &dateTimeController;
+  Refresh();
 }
 
 AccelerometerAverage::~AccelerometerAverage() {
@@ -53,11 +83,69 @@ void AccelerometerAverage::Refresh() {
     lv_label_set_text_fmt(averageLabel, "Avg accel: %ld mg\nAvg HR: -- bpm", static_cast<long>(accelAverage));
   }
   lv_obj_align(averageLabel, nullptr, LV_ALIGN_CENTER, 0, 0);
+  UpdateRecentHistory();
 }
 
 void AccelerometerAverage::DeleteLoggedMinutes() {
   motionController.ClearMinuteAverageLog();
   Refresh();
+}
+
+void AccelerometerAverage::UpdateRecentHistory() {
+  std::array<MotionController::LoggedMinuteEntry, historyEntryCount> recentMinutes {};
+  const auto available = motionController.GetRecentLoggedMinutes(recentMinutes);
+  const auto nowTicks = xTaskGetTickCount();
+  auto nowDateTime = std::chrono::system_clock::time_point {};
+  const bool hasDateTime = dateTimeController != nullptr;
+  if (hasDateTime) {
+    nowDateTime = dateTimeController->CurrentDateTime();
+  }
+
+  for (size_t i = 0; i < historyLabels.size(); ++i) {
+    if (historyLabels[i] == nullptr) {
+      continue;
+    }
+
+    if (i >= available) {
+      lv_label_set_text(historyLabels[i], "--:--   -- bpm   -- mg");
+      if (i == 0) {
+        lv_obj_align(historyLabels[i], historyTitleLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+      } else {
+        lv_obj_align(historyLabels[i], historyLabels[i - 1], LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+      }
+      continue;
+    }
+
+    const auto& entry = recentMinutes[i];
+    char timeBuffer[8] = "--:--";
+    if (hasDateTime && nowTicks >= entry.timestamp) {
+      const TickType_t tickDelta = nowTicks - entry.timestamp;
+      auto entryTime = nowDateTime - std::chrono::seconds(tickDelta / configTICK_RATE_HZ);
+      const auto entryTimeT = std::chrono::system_clock::to_time_t(entryTime);
+      if (const auto* entryTm = std::localtime(&entryTimeT); entryTm != nullptr) {
+        snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d", entryTm->tm_hour, entryTm->tm_min);
+      }
+    }
+
+    char heartRateBuffer[12];
+    if (entry.heartRate > 0) {
+      snprintf(heartRateBuffer, sizeof(heartRateBuffer), "%3d bpm", entry.heartRate);
+    } else {
+      snprintf(heartRateBuffer, sizeof(heartRateBuffer), " -- bpm");
+    }
+
+    lv_label_set_text_fmt(historyLabels[i],
+                          "%s   %s   %ld mg",
+                          timeBuffer,
+                          heartRateBuffer,
+                          static_cast<long>(entry.acceleration));
+
+    if (i == 0) {
+      lv_obj_align(historyLabels[i], historyTitleLabel, LV_ALIGN_OUT_BOTTOM_MID, 0, 4);
+    } else {
+      lv_obj_align(historyLabels[i], historyLabels[i - 1], LV_ALIGN_OUT_BOTTOM_MID, 0, 2);
+    }
+  }
 }
 
 void AccelerometerAverage::DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t event) {

@@ -92,6 +92,14 @@ namespace Pinetime {
         return minuteHeartRateSampleCount > 0;
       }
 
+      struct LoggedMinuteEntry {
+        TickType_t timestamp = 0;
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+      };
+
+      size_t GetRecentLoggedMinutes(std::array<LoggedMinuteEntry, 3>& entries) const;
+
       void ClearMinuteAverageLog();
 
     private:
