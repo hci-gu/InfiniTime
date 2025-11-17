@@ -1,5 +1,6 @@
 #include "displayapp/screens/AccelerometerAverage.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -69,7 +70,14 @@ AccelerometerAverage::~AccelerometerAverage() {
 
 void AccelerometerAverage::Refresh() {
   auto storedMinutes = motionController.LoggedMinuteCount();
-  lv_label_set_text_fmt(countLabel, "Minutes stored: %lu", static_cast<unsigned long>(storedMinutes));
+  if (storedMinutes > maxHistoryRows) {
+    lv_label_set_text_fmt(countLabel,
+                          "Minutes stored: %lu (showing last %u)",
+                          static_cast<unsigned long>(storedMinutes),
+                          static_cast<unsigned>(maxHistoryRows));
+  } else {
+    lv_label_set_text_fmt(countLabel, "Minutes stored: %lu", static_cast<unsigned long>(storedMinutes));
+  }
 
   auto accelAverage = motionController.LoggedMinutesAverage();
   if (motionController.HasLoggedHeartRateAverage()) {
@@ -106,10 +114,11 @@ void AccelerometerAverage::UpdateHistoryTable(size_t storedMinutes) {
   }
 
   displayedMinuteCount = storedMinutes;
-  lv_table_set_row_cnt(historyTable, storedMinutes + 1);
+  const size_t rowsToDisplay = std::min(storedMinutes, maxHistoryRows);
+  lv_table_set_row_cnt(historyTable, rowsToDisplay + 1);
   SetHistoryTableHeader();
 
-  if (storedMinutes == 0) {
+  if (storedMinutes == 0 || rowsToDisplay == 0) {
     return;
   }
 
@@ -119,8 +128,9 @@ void AccelerometerAverage::UpdateHistoryTable(size_t storedMinutes) {
     now = dateTimeController->CurrentDateTime();
   }
 
-  for (size_t row = 0; row < storedMinutes; ++row) {
-    size_t logIndex = storedMinutes - 1 - row;
+  const size_t oldestIndex = storedMinutes - rowsToDisplay;
+  for (size_t row = 0; row < rowsToDisplay; ++row) {
+    size_t logIndex = oldestIndex + row;
     size_t tableRow = row + 1;
     auto entry = motionController.LoggedMinuteAt(logIndex);
     char timeBuffer[6] = {'-', '-', ':', '-', '-', '\0'};

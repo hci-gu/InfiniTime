@@ -38,6 +38,9 @@ namespace Pinetime {
 
         AccelerometerAverage(Controllers::MotionController& motionController,
                              Controllers::DateTime* dateTimeController);
+
+        // LVGL allocates per-cell metadata, so keep the table to a manageable number of rows
+        static constexpr size_t maxHistoryRows = 120;
       };
     }
 
