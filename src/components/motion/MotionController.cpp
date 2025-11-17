@@ -114,6 +114,7 @@ void MotionController::ClearMinuteAverageLog() {
   minuteAverageTotal = 0;
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
+  std::fill(minuteAverageTimestamps.begin(), minuteAverageTimestamps.end(), 0);
   std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
   std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
   minuteAverageDirty = true;
@@ -338,17 +339,18 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
-  AppendMinuteAverage(accelerationAverage, heartRateAverage);
+  AppendMinuteAverage(timestamp, accelerationAverage, heartRateAverage);
   lastLoggedMinuteTick = timestamp;
 }
 
-void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
+void MotionController::AppendMinuteAverage(TickType_t timestamp, int32_t accelerationAverage, int32_t heartRateAverage) {
   const int32_t clampedHeartRate = std::clamp<int32_t>(
     heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
 
   if (minuteAverageCount < minuteAverageLogSize) {
     size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
+    minuteAverageTimestamps[index] = timestamp;
     minuteAccelerationAverages[index] = accelerationAverage;
     minuteHeartRateAverages[index] = storedHeartRate;
     minuteAverageCount++;
@@ -360,6 +362,7 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
       minuteHeartRateTotal -= oldestHeartRate;
       minuteHeartRateSampleCount--;
     }
+    minuteAverageTimestamps[minuteAverageStart] = timestamp;
     minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
     minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
     minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
@@ -401,20 +404,21 @@ void MotionController::SaveMinuteAverageLog() {
   }
 
   struct Header {
-    uint32_t version;
     uint32_t count;
-  } header {minuteAverageLogVersion, static_cast<uint32_t>(minuteAverageCount)};
+  } header {static_cast<uint32_t>(minuteAverageCount)};
 
   fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
 
   struct DiskEntry {
+    TickType_t timestamp;
     int32_t acceleration;
     int32_t heartRate;
   };
 
   for (size_t i = 0; i < minuteAverageCount; ++i) {
     size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
+    DiskEntry entry {
+      minuteAverageTimestamps[index], minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
     fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
   }
 
@@ -433,16 +437,10 @@ void MotionController::LoadMinuteAverageLog() {
   }
 
   struct Header {
-    uint32_t version;
     uint32_t count;
   } header {};
 
   if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
-    fs->FileClose(&file);
-    return;
-  }
-
-  if (header.version != minuteAverageLogVersion && header.version != 1) {
     fs->FileClose(&file);
     return;
   }
@@ -455,38 +453,27 @@ void MotionController::LoadMinuteAverageLog() {
 
   size_t count = std::min(static_cast<size_t>(header.count), minuteAverageLogSize);
 
-  if (header.version == 1) {
-    for (size_t i = 0; i < count; ++i) {
-      int32_t value = 0;
-      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
-        break;
-      }
-      minuteAccelerationAverages[i] = value;
-      minuteHeartRateAverages[i] = 0;
-      minuteAverageTotal += value;
-      minuteAverageCount++;
-    }
-  } else {
-    struct DiskEntry {
-      int32_t acceleration;
-      int32_t heartRate;
-    } entry {};
+  struct DiskEntry {
+    TickType_t timestamp;
+    int32_t acceleration;
+    int32_t heartRate;
+  } entry {};
 
-    for (size_t i = 0; i < count; ++i) {
-      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
-        break;
-      }
-      minuteAccelerationAverages[i] = entry.acceleration;
-      const int32_t clampedHeartRate = std::clamp<int32_t>(
-        entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
-      minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
-      minuteAverageTotal += entry.acceleration;
-      if (clampedHeartRate > 0) {
-        minuteHeartRateTotal += clampedHeartRate;
-        minuteHeartRateSampleCount++;
-      }
-      minuteAverageCount++;
+  for (size_t i = 0; i < count; ++i) {
+    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+      break;
     }
+    minuteAverageTimestamps[i] = entry.timestamp;
+    minuteAccelerationAverages[i] = entry.acceleration;
+    const int32_t clampedHeartRate = std::clamp<int32_t>(
+      entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+    minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+    minuteAverageTotal += entry.acceleration;
+    if (clampedHeartRate > 0) {
+      minuteHeartRateTotal += clampedHeartRate;
+      minuteHeartRateSampleCount++;
+    }
+    minuteAverageCount++;
   }
 
   fs->FileClose(&file);
