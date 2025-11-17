@@ -6,6 +6,7 @@
 #include <task.h>
 
 #include "utility/Math.h"
+#include "components/datetime/DateTimeController.h"
 
 using namespace Pinetime::Controllers;
 
@@ -108,6 +109,23 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
   return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
+void MotionController::SetDateTimeController(Pinetime::Controllers::DateTime* controller) {
+  dateTimeController = controller;
+}
+
+bool MotionController::GetLoggedMinute(size_t indexFromNewest, MinuteAverageEntry& entry) const {
+  if (indexFromNewest >= minuteAverageCount) {
+    return false;
+  }
+
+  size_t offsetFromOldest = minuteAverageCount - 1 - indexFromNewest;
+  size_t index = (minuteAverageStart + offsetFromOldest) % minuteAverageLogSize;
+  entry.acceleration = minuteAccelerationAverages[index];
+  entry.heartRate = minuteHeartRateAverages[index];
+  entry.minuteOfDay = minuteLoggedMinuteOfDay[index];
+  return true;
+}
+
 void MotionController::ClearMinuteAverageLog() {
   minuteAverageStart = 0;
   minuteAverageCount = 0;
@@ -116,6 +134,7 @@ void MotionController::ClearMinuteAverageLog() {
   minuteHeartRateSampleCount = 0;
   std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
   std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
+  std::fill(minuteLoggedMinuteOfDay.begin(), minuteLoggedMinuteOfDay.end(), invalidMinuteOfDay);
   minuteAverageDirty = true;
   MaybePersistMinuteAverageLog();
 }
@@ -202,6 +221,7 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pineti
 
   fs = &fsController;
   storageAccessible = true;
+  minuteLoggedMinuteOfDay.fill(invalidMinuteOfDay);
   LoadMinuteAverageLog();
   lastLoggedMinuteTick = xTaskGetTickCount();
 }
@@ -338,11 +358,12 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
-  AppendMinuteAverage(accelerationAverage, heartRateAverage);
+  uint16_t minuteOfDay = CurrentMinuteOfDay();
+  AppendMinuteAverage(accelerationAverage, heartRateAverage, minuteOfDay);
   lastLoggedMinuteTick = timestamp;
 }
 
-void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage) {
+void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage, uint16_t minuteOfDay) {
   const int32_t clampedHeartRate = std::clamp<int32_t>(
     heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
@@ -351,6 +372,7 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
     minuteAccelerationAverages[index] = accelerationAverage;
     minuteHeartRateAverages[index] = storedHeartRate;
+    minuteLoggedMinuteOfDay[index] = minuteOfDay;
     minuteAverageCount++;
   } else {
     const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
@@ -362,6 +384,7 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     }
     minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
     minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
+    minuteLoggedMinuteOfDay[minuteAverageStart] = minuteOfDay;
     minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
   }
 
@@ -410,11 +433,14 @@ void MotionController::SaveMinuteAverageLog() {
   struct DiskEntry {
     int32_t acceleration;
     int32_t heartRate;
+    uint16_t minuteOfDay;
+    uint16_t reserved;
   };
 
   for (size_t i = 0; i < minuteAverageCount; ++i) {
     size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
+    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index],
+                     minuteLoggedMinuteOfDay[index], 0};
     fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
   }
 
@@ -442,7 +468,7 @@ void MotionController::LoadMinuteAverageLog() {
     return;
   }
 
-  if (header.version != minuteAverageLogVersion && header.version != 1) {
+  if (header.version != minuteAverageLogVersion && header.version != 1 && header.version != 2) {
     fs->FileClose(&file);
     return;
   }
@@ -452,6 +478,7 @@ void MotionController::LoadMinuteAverageLog() {
   minuteAverageTotal = 0;
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
+  minuteLoggedMinuteOfDay.fill(invalidMinuteOfDay);
 
   size_t count = std::min(static_cast<size_t>(header.count), minuteAverageLogSize);
 
@@ -463,11 +490,12 @@ void MotionController::LoadMinuteAverageLog() {
       }
       minuteAccelerationAverages[i] = value;
       minuteHeartRateAverages[i] = 0;
+      minuteLoggedMinuteOfDay[i] = invalidMinuteOfDay;
       minuteAverageTotal += value;
       minuteAverageCount++;
     }
-  } else {
-    struct DiskEntry {
+  } else if (header.version == 2) {
+    struct DiskEntryV2 {
       int32_t acceleration;
       int32_t heartRate;
     } entry {};
@@ -480,6 +508,31 @@ void MotionController::LoadMinuteAverageLog() {
       const int32_t clampedHeartRate = std::clamp<int32_t>(
         entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
       minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+      minuteLoggedMinuteOfDay[i] = invalidMinuteOfDay;
+      minuteAverageTotal += entry.acceleration;
+      if (clampedHeartRate > 0) {
+        minuteHeartRateTotal += clampedHeartRate;
+        minuteHeartRateSampleCount++;
+      }
+      minuteAverageCount++;
+    }
+  } else {
+    struct DiskEntryV3 {
+      int32_t acceleration;
+      int32_t heartRate;
+      uint16_t minuteOfDay;
+      uint16_t reserved;
+    } entry {};
+
+    for (size_t i = 0; i < count; ++i) {
+      if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+        break;
+      }
+      minuteAccelerationAverages[i] = entry.acceleration;
+      const int32_t clampedHeartRate = std::clamp<int32_t>(
+        entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
+      minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
+      minuteLoggedMinuteOfDay[i] = entry.minuteOfDay < invalidMinuteOfDay ? entry.minuteOfDay : invalidMinuteOfDay;
       minuteAverageTotal += entry.acceleration;
       if (clampedHeartRate > 0) {
         minuteHeartRateTotal += clampedHeartRate;
@@ -498,4 +551,18 @@ void MotionController::MaybePersistMinuteAverageLog() {
   }
 
   SaveMinuteAverageLog();
+}
+
+uint16_t MotionController::CurrentMinuteOfDay() const {
+  if (dateTimeController == nullptr) {
+    return invalidMinuteOfDay;
+  }
+
+  const uint16_t hours = dateTimeController->Hours();
+  const uint16_t minutes = dateTimeController->Minutes();
+  if (hours >= 24 || minutes >= 60) {
+    return invalidMinuteOfDay;
+  }
+
+  return static_cast<uint16_t>(hours * 60 + minutes);
 }

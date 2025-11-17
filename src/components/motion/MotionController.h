@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 
 #include <FreeRTOS.h>
 
@@ -9,6 +10,12 @@
 #include "components/ble/MotionService.h"
 #include "components/fs/FS.h"
 #include "utility/CircularBuffer.h"
+
+namespace Pinetime {
+  namespace Controllers {
+    class DateTime;
+  }
+}
 
 namespace Pinetime {
   namespace Controllers {
@@ -92,6 +99,16 @@ namespace Pinetime {
         return minuteHeartRateSampleCount > 0;
       }
 
+      struct MinuteAverageEntry {
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+        uint16_t minuteOfDay = 0;
+      };
+
+      bool GetLoggedMinute(size_t indexFromNewest, MinuteAverageEntry& entry) const;
+
+      void SetDateTimeController(Pinetime::Controllers::DateTime* controller);
+
       void ClearMinuteAverageLog();
 
     private:
@@ -166,14 +183,16 @@ namespace Pinetime {
 
       static constexpr size_t minuteAverageLogSize = 1440;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 2;
+      static constexpr uint32_t minuteAverageLogVersion = 3;
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
+      static constexpr uint16_t invalidMinuteOfDay = std::numeric_limits<uint16_t>::max();
 
       Pinetime::Controllers::FS* fs = nullptr;
 
       std::array<int32_t, minuteAverageLogSize> minuteAccelerationAverages = {};
       std::array<int16_t, minuteAverageLogSize> minuteHeartRateAverages = {};
+      std::array<uint16_t, minuteAverageLogSize> minuteLoggedMinuteOfDay = {};
       size_t minuteAverageStart = 0;
       size_t minuteAverageCount = 0;
       int64_t minuteAverageTotal = 0;
@@ -182,15 +201,17 @@ namespace Pinetime {
       TickType_t lastLoggedMinuteTick = 0;
       bool minuteAverageDirty = false;
       bool storageAccessible = true;
+      Pinetime::Controllers::DateTime* dateTimeController = nullptr;
 
       void LoadMinuteAverageLog();
       void SaveMinuteAverageLog();
       void EnsureLogDirectory();
-      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage);
+      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage, uint16_t minuteOfDay);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
       void MaybePersistMinuteAverageLog();
+      uint16_t CurrentMinuteOfDay() const;
     };
   }
 }

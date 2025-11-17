@@ -76,13 +76,14 @@ SystemTask::SystemTask(Drivers::SpiMaster& spi,
     buttonHandler {buttonHandler},
     nimbleController(*this,
                      bleController,
-                     dateTimeController,
+                    dateTimeController,
                      notificationManager,
                      batteryController,
                      spiNorFlash,
                      heartRateController,
                      motionController,
                      fs) {
+  motionController.SetDateTimeController(&dateTimeController);
 }
 
 void SystemTask::Start() {
