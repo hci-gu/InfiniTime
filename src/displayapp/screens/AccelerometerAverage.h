@@ -14,6 +14,7 @@ namespace Pinetime {
 
       class AccelerometerAverage : public Screen {
       public:
+        AccelerometerAverage(Controllers::MotionController& motionController);
         AccelerometerAverage(Controllers::MotionController& motionController, Controllers::DateTime& dateTimeController);
         ~AccelerometerAverage() override;
 
@@ -21,7 +22,7 @@ namespace Pinetime {
 
       private:
         Controllers::MotionController& motionController;
-        Controllers::DateTime& dateTimeController;
+        Controllers::DateTime* dateTimeController = nullptr;
         lv_obj_t* countLabel = nullptr;
         lv_obj_t* averageLabel = nullptr;
         lv_obj_t* deleteButton = nullptr;
@@ -34,6 +35,9 @@ namespace Pinetime {
         static void DeleteButtonEventHandler(lv_obj_t* obj, lv_event_t event);
         void UpdateHistoryTable(size_t storedMinutes);
         void SetHistoryTableHeader();
+
+        AccelerometerAverage(Controllers::MotionController& motionController,
+                             Controllers::DateTime* dateTimeController);
       };
     }
 

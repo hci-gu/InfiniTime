@@ -12,8 +12,17 @@ extern lv_font_t jetbrains_mono_bold_20;
 using namespace Pinetime::Applications::Screens;
 
 
+AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController)
+  : AccelerometerAverage {motionController, nullptr} {
+}
+
 AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController,
                                            Controllers::DateTime& dateTimeController)
+  : AccelerometerAverage {motionController, &dateTimeController} {
+}
+
+AccelerometerAverage::AccelerometerAverage(Controllers::MotionController& motionController,
+                                           Controllers::DateTime* dateTimeController)
   : motionController {motionController}, dateTimeController {dateTimeController} {
   countLabel = lv_label_create(lv_scr_act(), nullptr);
   lv_label_set_text_static(countLabel, "Minutes stored: 0");
@@ -104,21 +113,27 @@ void AccelerometerAverage::UpdateHistoryTable(size_t storedMinutes) {
     return;
   }
 
-  const auto now = dateTimeController.CurrentDateTime();
+  const auto hasDateTime = dateTimeController != nullptr;
+  std::chrono::time_point<std::chrono::system_clock, std::chrono::system_clock::duration> now {};
+  if (hasDateTime) {
+    now = dateTimeController->CurrentDateTime();
+  }
 
   for (size_t row = 0; row < storedMinutes; ++row) {
     size_t logIndex = storedMinutes - 1 - row;
     size_t tableRow = row + 1;
     auto entry = motionController.LoggedMinuteAt(logIndex);
-    size_t minutesAgo = storedMinutes - logIndex;
-    auto entryTime = now - std::chrono::minutes(static_cast<int64_t>(minutesAgo));
-    auto systemEntryTime =
-      std::chrono::time_point_cast<std::chrono::system_clock::duration>(entryTime);
-    std::time_t entryTimeT = std::chrono::system_clock::to_time_t(systemEntryTime);
-
     char timeBuffer[6] = {'-', '-', ':', '-', '-', '\0'};
-    if (auto* tmInfo = std::localtime(&entryTimeT); tmInfo != nullptr) {
-      snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d", tmInfo->tm_hour, tmInfo->tm_min);
+    if (hasDateTime) {
+      size_t minutesAgo = storedMinutes - logIndex;
+      auto entryTime = now - std::chrono::minutes(static_cast<int64_t>(minutesAgo));
+      auto systemEntryTime =
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(entryTime);
+      std::time_t entryTimeT = std::chrono::system_clock::to_time_t(systemEntryTime);
+
+      if (auto* tmInfo = std::localtime(&entryTimeT); tmInfo != nullptr) {
+        snprintf(timeBuffer, sizeof(timeBuffer), "%02d:%02d", tmInfo->tm_hour, tmInfo->tm_min);
+      }
     }
     lv_table_set_cell_value(historyTable, tableRow, 0, timeBuffer);
 
