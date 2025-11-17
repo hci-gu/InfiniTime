@@ -108,6 +108,17 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
   return static_cast<int32_t>(minuteHeartRateTotal / static_cast<int64_t>(minuteHeartRateSampleCount));
 }
 
+bool MotionController::GetLoggedMinute(size_t indexFromNewest, LoggedMinute& entry) const {
+  if (indexFromNewest >= minuteAverageCount) {
+    return false;
+  }
+
+  const size_t newestIndex = (minuteAverageStart + minuteAverageCount - 1 - indexFromNewest + minuteAverageLogSize) % minuteAverageLogSize;
+  entry.acceleration = minuteAccelerationAverages[newestIndex];
+  entry.heartRate = minuteHeartRateAverages[newestIndex];
+  return true;
+}
+
 void MotionController::ClearMinuteAverageLog() {
   minuteAverageStart = 0;
   minuteAverageCount = 0;
