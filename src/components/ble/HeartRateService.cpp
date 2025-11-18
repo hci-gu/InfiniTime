@@ -1,5 +1,6 @@
 #include "components/ble/HeartRateService.h"
 #include "components/heartrate/HeartRateController.h"
+#include "components/motion/MotionController.h"
 #include "components/ble/NimbleController.h"
 #include <nrf_log.h>
 
@@ -16,9 +17,12 @@ namespace {
 }
 
 // TODO Refactoring - remove dependency to SystemTask
-HeartRateService::HeartRateService(NimbleController& nimble, Controllers::HeartRateController& heartRateController)
+HeartRateService::HeartRateService(NimbleController& nimble,
+                                   Controllers::HeartRateController& heartRateController,
+                                   Controllers::MotionController& motionController)
   : nimble {nimble},
     heartRateController {heartRateController},
+    motionController {motionController},
     characteristicDefinition {{.uuid = &heartRateMeasurementUuid.u,
                                .access_cb = HeartRateServiceCallback,
                                .arg = this,
@@ -48,20 +52,21 @@ void HeartRateService::Init() {
 int HeartRateService::OnHeartRateRequested(uint16_t attributeHandle, ble_gatt_access_ctxt* context) {
   if (attributeHandle == heartRateMeasurementHandle) {
     NRF_LOG_INFO("HEARTRATE : handle = %d", heartRateMeasurementHandle);
-    uint8_t buffer[2] = {0, heartRateController.HeartRate()}; // [0] = flags, [1] = hr value
-
-    int res = os_mbuf_append(context->om, buffer, 2);
+    auto payload = BuildAccelAveragePayload();
+    int res = os_mbuf_append(context->om, &payload, sizeof(payload));
     return (res == 0) ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
   }
   return 0;
 }
 
 void HeartRateService::OnNewHeartRateValue(uint8_t heartRateValue) {
+  (void)heartRateValue;
+
   if (!heartRateMeasurementNotificationEnable)
     return;
 
-  uint8_t buffer[2] = {0, heartRateValue}; // [0] = flags, [1] = hr value
-  auto* om = ble_hs_mbuf_from_flat(buffer, 2);
+  auto payload = BuildAccelAveragePayload();
+  auto* om = ble_hs_mbuf_from_flat(&payload, sizeof(payload));
 
   uint16_t connectionHandle = nimble.connHandle();
 
@@ -80,4 +85,14 @@ void HeartRateService::SubscribeNotification(uint16_t attributeHandle) {
 void HeartRateService::UnsubscribeNotification(uint16_t attributeHandle) {
   if (attributeHandle == heartRateMeasurementHandle)
     heartRateMeasurementNotificationEnable = false;
+}
+
+HeartRateService::AccelAveragePayload HeartRateService::BuildAccelAveragePayload() const {
+  AccelAveragePayload payload {};
+  payload.storedMinutes = static_cast<uint32_t>(motionController.LoggedMinuteCount());
+  payload.accelerationAverage = motionController.LoggedMinutesAverage();
+  payload.heartRateAverage = motionController.HasLoggedHeartRateAverage()
+                               ? motionController.LoggedMinutesHeartRateAverage()
+                               : 0;
+  return payload;
 }
