@@ -1,6 +1,8 @@
 #include "components/ble/HeartRateService.h"
 #include "components/heartrate/HeartRateController.h"
+#include "components/motion/MotionController.h"
 #include "components/ble/NimbleController.h"
+#include <host/ble_hs_mbuf.h>
 #include <nrf_log.h>
 
 using namespace Pinetime::Controllers;
@@ -16,9 +18,12 @@ namespace {
 }
 
 // TODO Refactoring - remove dependency to SystemTask
-HeartRateService::HeartRateService(NimbleController& nimble, Controllers::HeartRateController& heartRateController)
+HeartRateService::HeartRateService(NimbleController& nimble,
+                                   Controllers::HeartRateController& heartRateController,
+                                   Controllers::MotionController& motionController)
   : nimble {nimble},
     heartRateController {heartRateController},
+    motionController {motionController},
     characteristicDefinition {{.uuid = &heartRateMeasurementUuid.u,
                                .access_cb = HeartRateServiceCallback,
                                .arg = this,
@@ -48,20 +53,25 @@ void HeartRateService::Init() {
 int HeartRateService::OnHeartRateRequested(uint16_t attributeHandle, ble_gatt_access_ctxt* context) {
   if (attributeHandle == heartRateMeasurementHandle) {
     NRF_LOG_INFO("HEARTRATE : handle = %d", heartRateMeasurementHandle);
-    uint8_t buffer[2] = {0, heartRateController.HeartRate()}; // [0] = flags, [1] = hr value
-
-    int res = os_mbuf_append(context->om, buffer, 2);
-    return (res == 0) ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    return AppendAccelAverageLog(context->om);
   }
   return 0;
 }
 
 void HeartRateService::OnNewHeartRateValue(uint8_t heartRateValue) {
+  static_cast<void>(heartRateValue);
   if (!heartRateMeasurementNotificationEnable)
     return;
 
-  uint8_t buffer[2] = {0, heartRateValue}; // [0] = flags, [1] = hr value
-  auto* om = ble_hs_mbuf_from_flat(buffer, 2);
+  auto* om = ble_hs_mbuf_att_pkt();
+  if (om == nullptr) {
+    return;
+  }
+
+  if (AppendAccelAverageLog(om) != 0) {
+    os_mbuf_free_chain(om);
+    return;
+  }
 
   uint16_t connectionHandle = nimble.connHandle();
 
@@ -80,4 +90,26 @@ void HeartRateService::SubscribeNotification(uint16_t attributeHandle) {
 void HeartRateService::UnsubscribeNotification(uint16_t attributeHandle) {
   if (attributeHandle == heartRateMeasurementHandle)
     heartRateMeasurementNotificationEnable = false;
+}
+
+int HeartRateService::AppendAccelAverageLog(struct os_mbuf* buffer) {
+  const auto count = static_cast<uint32_t>(motionController.LoggedMinuteCount());
+  if (os_mbuf_append(buffer, &count, sizeof(count)) != 0) {
+    return BLE_ATT_ERR_INSUFFICIENT_RES;
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    const auto entry = motionController.GetMinuteAverageEntry(i);
+    if (os_mbuf_append(buffer, &entry.timestamp, sizeof(entry.timestamp)) != 0) {
+      return BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (os_mbuf_append(buffer, &entry.acceleration, sizeof(entry.acceleration)) != 0) {
+      return BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (os_mbuf_append(buffer, &entry.heartRate, sizeof(entry.heartRate)) != 0) {
+      return BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+  }
+
+  return 0;
 }

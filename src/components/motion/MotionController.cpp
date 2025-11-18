@@ -121,6 +121,21 @@ void MotionController::ClearMinuteAverageLog() {
   MaybePersistMinuteAverageLog();
 }
 
+MotionController::MinuteAverageEntry MotionController::GetMinuteAverageEntry(size_t index) const {
+  MinuteAverageEntry entry {};
+
+  if (index >= minuteAverageCount) {
+    return entry;
+  }
+
+  size_t circularIndex = (minuteAverageStart + index) % minuteAverageLogSize;
+  entry.timestamp = minuteAverageTimestamps[circularIndex];
+  entry.acceleration = minuteAccelerationAverages[circularIndex];
+  entry.heartRate = minuteHeartRateAverages[circularIndex];
+
+  return entry;
+}
+
 MotionController::AccelStats MotionController::GetAccelStats() const {
   AccelStats stats;
 

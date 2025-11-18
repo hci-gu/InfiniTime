@@ -6,14 +6,19 @@
 #undef min
 #include <atomic>
 
+struct os_mbuf;
+
 namespace Pinetime {
   namespace Controllers {
     class HeartRateController;
     class NimbleController;
+    class MotionController;
 
     class HeartRateService {
     public:
-      HeartRateService(NimbleController& nimble, Controllers::HeartRateController& heartRateController);
+      HeartRateService(NimbleController& nimble,
+                       Controllers::HeartRateController& heartRateController,
+                       Controllers::MotionController& motionController);
       void Init();
       int OnHeartRateRequested(uint16_t attributeHandle, ble_gatt_access_ctxt* context);
       void OnNewHeartRateValue(uint8_t hearRateValue);
@@ -27,6 +32,7 @@ namespace Pinetime {
     private:
       NimbleController& nimble;
       Controllers::HeartRateController& heartRateController;
+      Controllers::MotionController& motionController;
       static constexpr uint16_t heartRateMeasurementId {0x2A37};
 
       static constexpr ble_uuid16_t heartRateMeasurementUuid {.u {.type = BLE_UUID_TYPE_16}, .value = heartRateMeasurementId};
@@ -36,6 +42,8 @@ namespace Pinetime {
 
       uint16_t heartRateMeasurementHandle;
       std::atomic_bool heartRateMeasurementNotificationEnable {false};
+
+      int AppendAccelAverageLog(struct os_mbuf* buffer);
     };
   }
 }
