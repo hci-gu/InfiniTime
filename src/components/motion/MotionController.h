@@ -14,6 +14,12 @@ namespace Pinetime {
   namespace Controllers {
     class MotionController {
     public:
+      struct MinuteAverageEntry {
+        TickType_t timestamp = 0;
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+      };
+
       enum class DeviceTypes {
         Unknown,
         BMA421,
@@ -91,6 +97,8 @@ namespace Pinetime {
       bool HasLoggedHeartRateAverage() const {
         return minuteHeartRateSampleCount > 0;
       }
+
+      bool GetLoggedMinuteEntry(size_t relativeIndex, MinuteAverageEntry& entry) const;
 
       void ClearMinuteAverageLog();
 
