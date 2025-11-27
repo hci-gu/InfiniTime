@@ -7,6 +7,7 @@
 
 #include "drivers/Bma421.h"
 #include "components/ble/MotionService.h"
+#include "components/datetime/DateTimeController.h"
 #include "components/fs/FS.h"
 #include "utility/CircularBuffer.h"
 
@@ -69,7 +70,7 @@ namespace Pinetime {
         return deviceType;
       }
 
-      void Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fs);
+      void Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pinetime::Controllers::FS& fs, Pinetime::Controllers::DateTime& dateTimeController);
 
       void OnStorageWake();
       void OnStorageSleep();
@@ -169,16 +170,18 @@ namespace Pinetime {
       // Small in-memory buffer to batch writes (5 minutes)
       static constexpr size_t inMemoryBufferSize = 5;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 3;
+      static constexpr uint32_t minuteAverageLogVersion = 4;
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 
       struct MinuteEntry {
         int32_t acceleration = 0;
         int16_t heartRate = 0;
+        uint32_t timestamp = 0;
       };
 
       Pinetime::Controllers::FS* fs = nullptr;
+      Pinetime::Controllers::DateTime* dateTimeController = nullptr;
 
       // Small circular buffer for recent entries not yet flushed to disk
       std::array<MinuteEntry, inMemoryBufferSize> inMemoryBuffer = {};
@@ -196,7 +199,7 @@ namespace Pinetime {
       void LoadMinuteAverageLog();
       void FlushBufferToDisk();
       void EnsureLogDirectory();
-      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage);
+      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage, uint32_t timestamp);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
