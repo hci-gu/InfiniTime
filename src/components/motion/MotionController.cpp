@@ -109,15 +109,21 @@ int32_t MotionController::LoggedMinutesHeartRateAverage() const {
 }
 
 void MotionController::ClearMinuteAverageLog() {
-  minuteAverageStart = 0;
+  // Clear in-memory buffer
+  inMemoryBufferCount = 0;
+  std::fill(inMemoryBuffer.begin(), inMemoryBuffer.end(), MinuteEntry{});
+
+  // Clear running totals
+  diskEntryCount = 0;
   minuteAverageCount = 0;
   minuteAverageTotal = 0;
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
-  std::fill(minuteAccelerationAverages.begin(), minuteAccelerationAverages.end(), 0);
-  std::fill(minuteHeartRateAverages.begin(), minuteHeartRateAverages.end(), 0);
-  minuteAverageDirty = true;
-  MaybePersistMinuteAverageLog();
+
+  // Delete the disk file
+  if (fs != nullptr && storageAccessible) {
+    fs->FileDelete(minuteAverageFile);
+  }
 }
 
 MotionController::AccelStats MotionController::GetAccelStats() const {
@@ -208,7 +214,10 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pineti
 
 void MotionController::OnStorageWake() {
   storageAccessible = true;
-  MaybePersistMinuteAverageLog();
+  // Flush any pending in-memory entries to disk
+  if (inMemoryBufferCount > 0) {
+    FlushBufferToDisk();
+  }
 }
 
 void MotionController::OnStorageSleep() {
@@ -347,31 +356,261 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
 
-  if (minuteAverageCount < minuteAverageLogSize) {
-    size_t index = (minuteAverageStart + minuteAverageCount) % minuteAverageLogSize;
-    minuteAccelerationAverages[index] = accelerationAverage;
-    minuteHeartRateAverages[index] = storedHeartRate;
-    minuteAverageCount++;
-  } else {
-    const auto oldestAcceleration = minuteAccelerationAverages[minuteAverageStart];
-    const auto oldestHeartRate = minuteHeartRateAverages[minuteAverageStart];
-    minuteAverageTotal -= oldestAcceleration;
-    if (oldestHeartRate > 0 && minuteHeartRateSampleCount > 0) {
-      minuteHeartRateTotal -= oldestHeartRate;
-      minuteHeartRateSampleCount--;
-    }
-    minuteAccelerationAverages[minuteAverageStart] = accelerationAverage;
-    minuteHeartRateAverages[minuteAverageStart] = storedHeartRate;
-    minuteAverageStart = (minuteAverageStart + 1) % minuteAverageLogSize;
-  }
+  // Add to in-memory buffer
+  inMemoryBuffer[inMemoryBufferCount].acceleration = accelerationAverage;
+  inMemoryBuffer[inMemoryBufferCount].heartRate = storedHeartRate;
+  inMemoryBufferCount++;
 
+  // Update running totals
   minuteAverageTotal += accelerationAverage;
+  minuteAverageCount++;
   if (storedHeartRate > 0) {
     minuteHeartRateTotal += storedHeartRate;
     minuteHeartRateSampleCount++;
   }
-  minuteAverageDirty = true;
-  MaybePersistMinuteAverageLog();
+
+  // Flush to disk when buffer is full
+  if (inMemoryBufferCount >= inMemoryBufferSize) {
+    FlushBufferToDisk();
+  }
+}
+
+void MotionController::FlushBufferToDisk() {
+  if (fs == nullptr || !storageAccessible || inMemoryBufferCount == 0) {
+    return;
+  }
+
+  EnsureLogDirectory();
+
+  // Check if we need to truncate (handle wrap-around at maxDiskLogEntries)
+  TruncateDiskLogIfNeeded();
+
+  lfs_file_t file;
+
+  // If file doesn't exist or is empty, create with header
+  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
+    // File doesn't exist, create it with header
+    if (fs->FileOpen(&file, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
+      return;
+    }
+
+    struct Header {
+      uint32_t version;
+      uint32_t count;
+      int64_t totalAcceleration;
+      int64_t totalHeartRate;
+      uint32_t heartRateSampleCount;
+    } header {
+      minuteAverageLogVersion,
+      static_cast<uint32_t>(inMemoryBufferCount),
+      minuteAverageTotal,
+      minuteHeartRateTotal,
+      static_cast<uint32_t>(minuteHeartRateSampleCount)
+    };
+
+    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+
+    // Write all buffered entries
+    struct DiskEntry {
+      int32_t acceleration;
+      int16_t heartRate;
+    };
+
+    for (size_t i = 0; i < inMemoryBufferCount; ++i) {
+      DiskEntry entry {inMemoryBuffer[i].acceleration, inMemoryBuffer[i].heartRate};
+      fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
+    }
+
+    fs->FileClose(&file);
+    diskEntryCount = inMemoryBufferCount;
+    inMemoryBufferCount = 0;
+    return;
+  }
+
+  fs->FileClose(&file);
+
+  // File exists, read current header, update count and totals, then append entries
+  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDWR) != LFS_ERR_OK) {
+    return;
+  }
+
+  struct Header {
+    uint32_t version;
+    uint32_t count;
+    int64_t totalAcceleration;
+    int64_t totalHeartRate;
+    uint32_t heartRateSampleCount;
+  } header {};
+
+  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
+    fs->FileClose(&file);
+    return;
+  }
+
+  // Update header with new totals
+  header.count = static_cast<uint32_t>(diskEntryCount + inMemoryBufferCount);
+  header.totalAcceleration = minuteAverageTotal;
+  header.totalHeartRate = minuteHeartRateTotal;
+  header.heartRateSampleCount = static_cast<uint32_t>(minuteHeartRateSampleCount);
+
+  // Seek back to start and write updated header
+  fs->FileSeek(&file, 0);
+  fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+
+  // Seek to end to append new entries
+  struct DiskEntry {
+    int32_t acceleration;
+    int16_t heartRate;
+  };
+  fs->FileSeek(&file, sizeof(Header) + diskEntryCount * sizeof(DiskEntry));
+
+  for (size_t i = 0; i < inMemoryBufferCount; ++i) {
+    DiskEntry entry {inMemoryBuffer[i].acceleration, inMemoryBuffer[i].heartRate};
+    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
+  }
+
+  fs->FileClose(&file);
+  diskEntryCount += inMemoryBufferCount;
+  inMemoryBufferCount = 0;
+}
+
+void MotionController::TruncateDiskLogIfNeeded() {
+  // If total entries would exceed max, we need to remove oldest entries from disk
+  size_t totalAfterFlush = diskEntryCount + inMemoryBufferCount;
+  if (totalAfterFlush <= maxDiskLogEntries) {
+    return;
+  }
+
+  size_t entriesToRemove = totalAfterFlush - maxDiskLogEntries;
+
+  if (fs == nullptr || !storageAccessible) {
+    return;
+  }
+
+  lfs_file_t file;
+  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
+    return;
+  }
+
+  struct Header {
+    uint32_t version;
+    uint32_t count;
+    int64_t totalAcceleration;
+    int64_t totalHeartRate;
+    uint32_t heartRateSampleCount;
+  } oldHeader {};
+
+  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&oldHeader), sizeof(oldHeader)) != sizeof(oldHeader)) {
+    fs->FileClose(&file);
+    return;
+  }
+
+  struct DiskEntry {
+    int32_t acceleration;
+    int16_t heartRate;
+  };
+
+  // Calculate new totals by reading and subtracting removed entries
+  int64_t removedAccelTotal = 0;
+  int64_t removedHeartRateTotal = 0;
+  size_t removedHeartRateSamples = 0;
+
+  for (size_t i = 0; i < entriesToRemove && i < diskEntryCount; ++i) {
+    DiskEntry entry {};
+    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+      break;
+    }
+    removedAccelTotal += entry.acceleration;
+    if (entry.heartRate > 0) {
+      removedHeartRateTotal += entry.heartRate;
+      removedHeartRateSamples++;
+    }
+  }
+
+  // Stream remaining entries to a temp file
+  size_t remainingEntries = diskEntryCount > entriesToRemove ? diskEntryCount - entriesToRemove : 0;
+
+  static constexpr const char tempFile[] = "/.system/accel_avg.tmp";
+  lfs_file_t newFile;
+
+  if (fs->FileOpen(&newFile, tempFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
+    fs->FileClose(&file);
+    return;
+  }
+
+  // Calculate new totals for disk portion
+  int64_t newDiskAccelTotal = 0;
+  int64_t newDiskHrTotal = 0;
+  size_t newDiskHrCount = 0;
+
+  // Write placeholder header (will update after streaming entries)
+  Header newHeader {
+    minuteAverageLogVersion,
+    static_cast<uint32_t>(remainingEntries),
+    0, 0, 0  // Will be updated
+  };
+  fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newHeader), sizeof(newHeader));
+
+  // Stream entries from old file to new file
+  for (size_t i = 0; i < remainingEntries; ++i) {
+    DiskEntry entry {};
+    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+      remainingEntries = i;
+      break;
+    }
+    fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
+    newDiskAccelTotal += entry.acceleration;
+    if (entry.heartRate > 0) {
+      newDiskHrTotal += entry.heartRate;
+      newDiskHrCount++;
+    }
+  }
+
+  fs->FileClose(&file);
+
+  // Update header with correct totals
+  newHeader.count = static_cast<uint32_t>(remainingEntries);
+  newHeader.totalAcceleration = newDiskAccelTotal;
+  newHeader.totalHeartRate = newDiskHrTotal;
+  newHeader.heartRateSampleCount = static_cast<uint32_t>(newDiskHrCount);
+
+  fs->FileSeek(&newFile, 0);
+  fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newHeader), sizeof(newHeader));
+  fs->FileClose(&newFile);
+
+  // Replace old file with new
+  fs->FileDelete(minuteAverageFile);
+
+  // Copy temp file to final location
+  if (fs->FileOpen(&file, tempFile, LFS_O_RDONLY) == LFS_ERR_OK) {
+    if (fs->FileOpen(&newFile, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) == LFS_ERR_OK) {
+      uint8_t buffer[64];
+      int bytesRead;
+      while ((bytesRead = fs->FileRead(&file, buffer, sizeof(buffer))) > 0) {
+        fs->FileWrite(&newFile, buffer, bytesRead);
+      }
+      fs->FileClose(&newFile);
+    }
+    fs->FileClose(&file);
+  }
+  fs->FileDelete(tempFile);
+
+  diskEntryCount = remainingEntries;
+
+  // Recalculate running totals to include in-memory buffer
+  minuteAverageTotal = newDiskAccelTotal;
+  minuteHeartRateTotal = newDiskHrTotal;
+  minuteHeartRateSampleCount = newDiskHrCount;
+  minuteAverageCount = remainingEntries;
+
+  for (size_t i = 0; i < inMemoryBufferCount; ++i) {
+    minuteAverageTotal += inMemoryBuffer[i].acceleration;
+    minuteAverageCount++;
+    if (inMemoryBuffer[i].heartRate > 0) {
+      minuteHeartRateTotal += inMemoryBuffer[i].heartRate;
+      minuteHeartRateSampleCount++;
+    }
+  }
 }
 
 void MotionController::EnsureLogDirectory() {
@@ -388,86 +627,90 @@ void MotionController::EnsureLogDirectory() {
   fs->DirCreate(minuteAverageDirectory);
 }
 
-void MotionController::SaveMinuteAverageLog() {
-  if (fs == nullptr) {
-    return;
-  }
-
-  EnsureLogDirectory();
-
-  lfs_file_t file;
-  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
-    return;
-  }
-
-  struct Header {
-    uint32_t version;
-    uint32_t count;
-  } header {minuteAverageLogVersion, static_cast<uint32_t>(minuteAverageCount)};
-
-  fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
-
-  struct DiskEntry {
-    int32_t acceleration;
-    int32_t heartRate;
-  };
-
-  for (size_t i = 0; i < minuteAverageCount; ++i) {
-    size_t index = (minuteAverageStart + i) % minuteAverageLogSize;
-    DiskEntry entry {minuteAccelerationAverages[index], minuteHeartRateAverages[index]};
-    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
-  }
-
-  fs->FileClose(&file);
-  minuteAverageDirty = false;
-}
-
 void MotionController::LoadMinuteAverageLog() {
   if (fs == nullptr) {
     return;
   }
+
+  // Reset state
+  inMemoryBufferCount = 0;
+  diskEntryCount = 0;
+  minuteAverageCount = 0;
+  minuteAverageTotal = 0;
+  minuteHeartRateTotal = 0;
+  minuteHeartRateSampleCount = 0;
 
   lfs_file_t file;
   if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
     return;
   }
 
-  struct Header {
+  // Try to read v3 header first
+  struct HeaderV3 {
     uint32_t version;
     uint32_t count;
-  } header {};
+    int64_t totalAcceleration;
+    int64_t totalHeartRate;
+    uint32_t heartRateSampleCount;
+  } headerV3 {};
 
-  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
+  struct HeaderV2 {
+    uint32_t version;
+    uint32_t count;
+  } headerV2 {};
+
+  // Read enough bytes to determine version
+  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&headerV2), sizeof(headerV2)) != sizeof(headerV2)) {
     fs->FileClose(&file);
     return;
   }
 
-  if (header.version != minuteAverageLogVersion && header.version != 1) {
+  if (headerV2.version == minuteAverageLogVersion) {
+    // It's v3, seek back and read full header
+    fs->FileSeek(&file, 0);
+    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&headerV3), sizeof(headerV3)) != sizeof(headerV3)) {
+      fs->FileClose(&file);
+      return;
+    }
+
+    // Load cached totals from header
+    diskEntryCount = std::min(static_cast<size_t>(headerV3.count), maxDiskLogEntries);
+    minuteAverageCount = diskEntryCount;
+    minuteAverageTotal = headerV3.totalAcceleration;
+    minuteHeartRateTotal = headerV3.totalHeartRate;
+    minuteHeartRateSampleCount = headerV3.heartRateSampleCount;
+
     fs->FileClose(&file);
     return;
   }
 
-  minuteAverageStart = 0;
-  minuteAverageCount = 0;
-  minuteAverageTotal = 0;
-  minuteHeartRateTotal = 0;
-  minuteHeartRateSampleCount = 0;
+  // Handle v1 and v2 migration - need to read all entries to compute totals
+  fs->FileSeek(&file, 0);
+  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&headerV2), sizeof(headerV2)) != sizeof(headerV2)) {
+    fs->FileClose(&file);
+    return;
+  }
 
-  size_t count = std::min(static_cast<size_t>(header.count), minuteAverageLogSize);
+  if (headerV2.version != 1 && headerV2.version != 2) {
+    fs->FileClose(&file);
+    return;
+  }
 
-  if (header.version == 1) {
+  size_t count = std::min(static_cast<size_t>(headerV2.count), maxDiskLogEntries);
+
+  if (headerV2.version == 1) {
+    // v1: only acceleration (int32_t per entry)
     for (size_t i = 0; i < count; ++i) {
       int32_t value = 0;
       if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
         break;
       }
-      minuteAccelerationAverages[i] = value;
-      minuteHeartRateAverages[i] = 0;
       minuteAverageTotal += value;
       minuteAverageCount++;
     }
   } else {
-    struct DiskEntry {
+    // v2: acceleration + heartRate (int32_t, int32_t per entry)
+    struct DiskEntryV2 {
       int32_t acceleration;
       int32_t heartRate;
     } entry {};
@@ -476,13 +719,9 @@ void MotionController::LoadMinuteAverageLog() {
       if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
         break;
       }
-      minuteAccelerationAverages[i] = entry.acceleration;
-      const int32_t clampedHeartRate = std::clamp<int32_t>(
-        entry.heartRate, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
-      minuteHeartRateAverages[i] = static_cast<int16_t>(clampedHeartRate);
       minuteAverageTotal += entry.acceleration;
-      if (clampedHeartRate > 0) {
-        minuteHeartRateTotal += clampedHeartRate;
+      if (entry.heartRate > 0) {
+        minuteHeartRateTotal += entry.heartRate;
         minuteHeartRateSampleCount++;
       }
       minuteAverageCount++;
@@ -490,12 +729,85 @@ void MotionController::LoadMinuteAverageLog() {
   }
 
   fs->FileClose(&file);
-}
+  diskEntryCount = minuteAverageCount;
 
-void MotionController::MaybePersistMinuteAverageLog() {
-  if (!minuteAverageDirty || fs == nullptr || !storageAccessible) {
-    return;
+  // Migrate to v3 format by rewriting the file
+  if (storageAccessible && minuteAverageCount > 0) {
+    // Read all entries again for migration
+    if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
+      return;
+    }
+
+    // Skip old header
+    fs->FileSeek(&file, sizeof(headerV2));
+
+    // Temporary storage for migration - use smaller buffer and stream
+    lfs_file_t newFile;
+    static constexpr const char tempFile[] = "/.system/accel_avg.tmp";
+
+    if (fs->FileOpen(&newFile, tempFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
+      fs->FileClose(&file);
+      return;
+    }
+
+    HeaderV3 newHeader {
+      minuteAverageLogVersion,
+      static_cast<uint32_t>(minuteAverageCount),
+      minuteAverageTotal,
+      minuteHeartRateTotal,
+      static_cast<uint32_t>(minuteHeartRateSampleCount)
+    };
+
+    fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newHeader), sizeof(newHeader));
+
+    struct DiskEntryV3 {
+      int32_t acceleration;
+      int16_t heartRate;
+    };
+
+    if (headerV2.version == 1) {
+      for (size_t i = 0; i < minuteAverageCount; ++i) {
+        int32_t value = 0;
+        if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&value), sizeof(value)) != sizeof(value)) {
+          break;
+        }
+        DiskEntryV3 newEntry {value, 0};
+        fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newEntry), sizeof(newEntry));
+      }
+    } else {
+      struct DiskEntryV2 {
+        int32_t acceleration;
+        int32_t heartRate;
+      } oldEntry {};
+
+      for (size_t i = 0; i < minuteAverageCount; ++i) {
+        if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&oldEntry), sizeof(oldEntry)) != sizeof(oldEntry)) {
+          break;
+        }
+        int16_t clampedHr = static_cast<int16_t>(std::clamp<int32_t>(
+          oldEntry.heartRate, 0, std::numeric_limits<int16_t>::max()));
+        DiskEntryV3 newEntry {oldEntry.acceleration, clampedHr};
+        fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newEntry), sizeof(newEntry));
+      }
+    }
+
+    fs->FileClose(&file);
+    fs->FileClose(&newFile);
+
+    // Replace old file with new
+    fs->FileDelete(minuteAverageFile);
+    // Note: LittleFS doesn't have rename, so we copy
+    if (fs->FileOpen(&file, tempFile, LFS_O_RDONLY) == LFS_ERR_OK) {
+      if (fs->FileOpen(&newFile, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) == LFS_ERR_OK) {
+        uint8_t buffer[64];
+        int bytesRead;
+        while ((bytesRead = fs->FileRead(&file, buffer, sizeof(buffer))) > 0) {
+          fs->FileWrite(&newFile, buffer, bytesRead);
+        }
+        fs->FileClose(&newFile);
+      }
+      fs->FileClose(&file);
+    }
+    fs->FileDelete(tempFile);
   }
-
-  SaveMinuteAverageLog();
 }

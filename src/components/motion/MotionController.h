@@ -164,33 +164,43 @@ namespace Pinetime {
       DeviceTypes deviceType = DeviceTypes::Unknown;
       Pinetime::Controllers::MotionService* service = nullptr;
 
-      static constexpr size_t minuteAverageLogSize = 1440;
+      // Maximum entries stored on disk (24 hours at 1 per minute)
+      static constexpr size_t maxDiskLogEntries = 1440;
+      // Small in-memory buffer to batch writes (5 minutes)
+      static constexpr size_t inMemoryBufferSize = 5;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 2;
+      static constexpr uint32_t minuteAverageLogVersion = 3;
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 
+      struct MinuteEntry {
+        int32_t acceleration = 0;
+        int16_t heartRate = 0;
+      };
+
       Pinetime::Controllers::FS* fs = nullptr;
 
-      std::array<int32_t, minuteAverageLogSize> minuteAccelerationAverages = {};
-      std::array<int16_t, minuteAverageLogSize> minuteHeartRateAverages = {};
-      size_t minuteAverageStart = 0;
-      size_t minuteAverageCount = 0;
-      int64_t minuteAverageTotal = 0;
-      int64_t minuteHeartRateTotal = 0;
-      size_t minuteHeartRateSampleCount = 0;
+      // Small circular buffer for recent entries not yet flushed to disk
+      std::array<MinuteEntry, inMemoryBufferSize> inMemoryBuffer = {};
+      size_t inMemoryBufferCount = 0;
+
+      // Running totals (disk + in-memory combined) for computing averages
+      size_t diskEntryCount = 0;        // Number of entries stored on disk
+      size_t minuteAverageCount = 0;    // Total entries (disk + in-memory)
+      int64_t minuteAverageTotal = 0;   // Sum of all acceleration values
+      int64_t minuteHeartRateTotal = 0; // Sum of all heart rate values
+      size_t minuteHeartRateSampleCount = 0; // Count of non-zero heart rate entries
       TickType_t lastLoggedMinuteTick = 0;
-      bool minuteAverageDirty = false;
       bool storageAccessible = true;
 
       void LoadMinuteAverageLog();
-      void SaveMinuteAverageLog();
+      void FlushBufferToDisk();
       void EnsureLogDirectory();
       void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
       int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
-      void MaybePersistMinuteAverageLog();
+      void TruncateDiskLogIfNeeded();
     };
   }
 }
