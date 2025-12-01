@@ -366,7 +366,30 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
 
-  // Add to in-memory buffer
+  // If buffer is full, try to flush first
+  if (inMemoryBufferCount >= inMemoryBufferSize) {
+    FlushBufferToDisk();
+
+    // If flush failed (buffer still full), discard oldest entry to make room for newest
+    // This prevents buffer overflow - data loss is preferable to crash
+    if (inMemoryBufferCount >= inMemoryBufferSize) {
+      // Subtract oldest entry from running totals
+      minuteAverageTotal -= inMemoryBuffer[0].acceleration;
+      minuteAverageCount--;
+      if (inMemoryBuffer[0].heartRate > 0) {
+        minuteHeartRateTotal -= inMemoryBuffer[0].heartRate;
+        minuteHeartRateSampleCount--;
+      }
+
+      // Shift entries left to discard oldest
+      for (size_t i = 1; i < inMemoryBufferSize; ++i) {
+        inMemoryBuffer[i - 1] = inMemoryBuffer[i];
+      }
+      inMemoryBufferCount--;
+    }
+  }
+
+  // Add to in-memory buffer (now guaranteed to have space)
   inMemoryBuffer[inMemoryBufferCount].acceleration = accelerationAverage;
   inMemoryBuffer[inMemoryBufferCount].heartRate = storedHeartRate;
   inMemoryBuffer[inMemoryBufferCount].timestamp = timestamp;
@@ -378,11 +401,6 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
   if (storedHeartRate > 0) {
     minuteHeartRateTotal += storedHeartRate;
     minuteHeartRateSampleCount++;
-  }
-
-  // Flush to disk when buffer is full
-  if (inMemoryBufferCount >= inMemoryBufferSize) {
-    FlushBufferToDisk();
   }
 }
 
@@ -396,12 +414,12 @@ void MotionController::FlushBufferToDisk() {
   // Check if we need to truncate (handle wrap-around at maxDiskLogEntries)
   TruncateDiskLogIfNeeded();
 
-  lfs_file_t file;
+  ScopedFile file(fs);
 
   // If file doesn't exist or is empty, create with header
-  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
+  if (!file.Open(minuteAverageFile, LFS_O_RDONLY)) {
     // File doesn't exist, create it with header
-    if (fs->FileOpen(&file, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
+    if (!file.Open(minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC)) {
       return;
     }
 
@@ -419,7 +437,9 @@ void MotionController::FlushBufferToDisk() {
       static_cast<uint32_t>(minuteHeartRateSampleCount)
     };
 
-    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+    if (file.Write(&header, sizeof(header)) != sizeof(header)) {
+      return; // ScopedFile destructor will close
+    }
 
     // Write all buffered entries
     struct DiskEntry {
@@ -430,19 +450,20 @@ void MotionController::FlushBufferToDisk() {
 
     for (size_t i = 0; i < inMemoryBufferCount; ++i) {
       DiskEntry entry {inMemoryBuffer[i].acceleration, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
-      fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
+      if (file.Write(&entry, sizeof(entry)) != sizeof(entry)) {
+        return; // ScopedFile destructor will close
+      }
     }
 
-    fs->FileClose(&file);
     diskEntryCount = inMemoryBufferCount;
     inMemoryBufferCount = 0;
     return;
   }
 
-  fs->FileClose(&file);
+  file.Close();
 
   // File exists, read current header, update count and totals, then append entries
-  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDWR) != LFS_ERR_OK) {
+  if (!file.Open(minuteAverageFile, LFS_O_RDWR)) {
     return;
   }
 
@@ -454,9 +475,8 @@ void MotionController::FlushBufferToDisk() {
     uint32_t heartRateSampleCount;
   } header {};
 
-  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
-    fs->FileClose(&file);
-    return;
+  if (file.Read(&header, sizeof(header)) != sizeof(header)) {
+    return; // ScopedFile destructor will close
   }
 
   // Update header with new totals
@@ -466,8 +486,12 @@ void MotionController::FlushBufferToDisk() {
   header.heartRateSampleCount = static_cast<uint32_t>(minuteHeartRateSampleCount);
 
   // Seek back to start and write updated header
-  fs->FileSeek(&file, 0);
-  fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&header), sizeof(header));
+  if (file.Seek(0) < 0) {
+    return; // ScopedFile destructor will close
+  }
+  if (file.Write(&header, sizeof(header)) != sizeof(header)) {
+    return; // ScopedFile destructor will close
+  }
 
   // Seek to end to append new entries
   struct DiskEntry {
@@ -475,14 +499,17 @@ void MotionController::FlushBufferToDisk() {
     int16_t heartRate;
     uint32_t timestamp;
   };
-  fs->FileSeek(&file, sizeof(Header) + diskEntryCount * sizeof(DiskEntry));
+  if (file.Seek(sizeof(Header) + diskEntryCount * sizeof(DiskEntry)) < 0) {
+    return; // ScopedFile destructor will close
+  }
 
   for (size_t i = 0; i < inMemoryBufferCount; ++i) {
     DiskEntry entry {inMemoryBuffer[i].acceleration, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
-    fs->FileWrite(&file, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
+    if (file.Write(&entry, sizeof(entry)) != sizeof(entry)) {
+      return; // ScopedFile destructor will close
+    }
   }
 
-  fs->FileClose(&file);
   diskEntryCount += inMemoryBufferCount;
   inMemoryBufferCount = 0;
 }
@@ -500,8 +527,8 @@ void MotionController::TruncateDiskLogIfNeeded() {
     return;
   }
 
-  lfs_file_t file;
-  if (fs->FileOpen(&file, minuteAverageFile, LFS_O_RDONLY) != LFS_ERR_OK) {
+  ScopedFile file(fs);
+  if (!file.Open(minuteAverageFile, LFS_O_RDONLY)) {
     return;
   }
 
@@ -513,9 +540,8 @@ void MotionController::TruncateDiskLogIfNeeded() {
     uint32_t heartRateSampleCount;
   } oldHeader {};
 
-  if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&oldHeader), sizeof(oldHeader)) != sizeof(oldHeader)) {
-    fs->FileClose(&file);
-    return;
+  if (file.Read(&oldHeader, sizeof(oldHeader)) != sizeof(oldHeader)) {
+    return; // ScopedFile destructor will close
   }
 
   struct DiskEntry {
@@ -531,7 +557,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
 
   for (size_t i = 0; i < entriesToRemove && i < diskEntryCount; ++i) {
     DiskEntry entry {};
-    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+    if (file.Read(&entry, sizeof(entry)) != sizeof(entry)) {
       break;
     }
     removedAccelTotal += entry.acceleration;
@@ -545,11 +571,10 @@ void MotionController::TruncateDiskLogIfNeeded() {
   size_t remainingEntries = diskEntryCount > entriesToRemove ? diskEntryCount - entriesToRemove : 0;
 
   static constexpr const char tempFile[] = "/.system/accel_avg.tmp";
-  lfs_file_t newFile;
+  ScopedFile newFile(fs);
 
-  if (fs->FileOpen(&newFile, tempFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != LFS_ERR_OK) {
-    fs->FileClose(&file);
-    return;
+  if (!newFile.Open(tempFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC)) {
+    return; // ScopedFile destructor will close file
   }
 
   // Calculate new totals for disk portion
@@ -563,16 +588,20 @@ void MotionController::TruncateDiskLogIfNeeded() {
     static_cast<uint32_t>(remainingEntries),
     0, 0, 0  // Will be updated
   };
-  fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newHeader), sizeof(newHeader));
+  if (newFile.Write(&newHeader, sizeof(newHeader)) != sizeof(newHeader)) {
+    return; // Both ScopedFile destructors will close files
+  }
 
   // Stream entries from old file to new file
   for (size_t i = 0; i < remainingEntries; ++i) {
     DiskEntry entry {};
-    if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&entry), sizeof(entry)) != sizeof(entry)) {
+    if (file.Read(&entry, sizeof(entry)) != sizeof(entry)) {
       remainingEntries = i;
       break;
     }
-    fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&entry), sizeof(entry));
+    if (newFile.Write(&entry, sizeof(entry)) != sizeof(entry)) {
+      return; // Both ScopedFile destructors will close files
+    }
     newDiskAccelTotal += entry.acceleration;
     if (entry.heartRate > 0) {
       newDiskHrTotal += entry.heartRate;
@@ -580,7 +609,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
     }
   }
 
-  fs->FileClose(&file);
+  file.Close();
 
   // Update header with correct totals
   newHeader.count = static_cast<uint32_t>(remainingEntries);
@@ -588,25 +617,34 @@ void MotionController::TruncateDiskLogIfNeeded() {
   newHeader.totalHeartRate = newDiskHrTotal;
   newHeader.heartRateSampleCount = static_cast<uint32_t>(newDiskHrCount);
 
-  fs->FileSeek(&newFile, 0);
-  fs->FileWrite(&newFile, reinterpret_cast<const uint8_t*>(&newHeader), sizeof(newHeader));
-  fs->FileClose(&newFile);
+  if (newFile.Seek(0) < 0) {
+    return; // ScopedFile destructor will close
+  }
+  if (newFile.Write(&newHeader, sizeof(newHeader)) != sizeof(newHeader)) {
+    return; // ScopedFile destructor will close
+  }
+  newFile.Close();
 
   // Replace old file with new
   fs->FileDelete(minuteAverageFile);
 
-  // Copy temp file to final location
-  if (fs->FileOpen(&file, tempFile, LFS_O_RDONLY) == LFS_ERR_OK) {
-    if (fs->FileOpen(&newFile, minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) == LFS_ERR_OK) {
-      uint8_t buffer[64];
-      int bytesRead;
-      while ((bytesRead = fs->FileRead(&file, buffer, sizeof(buffer))) > 0) {
-        fs->FileWrite(&newFile, buffer, bytesRead);
+  // Copy temp file to final location using ScopedFile for safety
+  {
+    ScopedFile srcFile(fs);
+    ScopedFile dstFile(fs);
+
+    if (srcFile.Open(tempFile, LFS_O_RDONLY)) {
+      if (dstFile.Open(minuteAverageFile, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC)) {
+        uint8_t buffer[64];
+        int bytesRead;
+        while ((bytesRead = srcFile.Read(buffer, sizeof(buffer))) > 0) {
+          if (dstFile.Write(buffer, bytesRead) != bytesRead) {
+            break; // Write failed, ScopedFile destructors will close both files
+          }
+        }
       }
-      fs->FileClose(&newFile);
     }
-    fs->FileClose(&file);
-  }
+  } // ScopedFile destructors ensure both files are closed
   fs->FileDelete(tempFile);
 
   diskEntryCount = remainingEntries;

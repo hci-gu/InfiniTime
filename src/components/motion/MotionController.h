@@ -13,6 +13,53 @@
 
 namespace Pinetime {
   namespace Controllers {
+    // RAII wrapper for LittleFS file handles to ensure cleanup on all paths
+    class ScopedFile {
+    public:
+      ScopedFile(FS* fs) : fs(fs), isOpen(false) {}
+      ~ScopedFile() { Close(); }
+
+      // Non-copyable
+      ScopedFile(const ScopedFile&) = delete;
+      ScopedFile& operator=(const ScopedFile&) = delete;
+
+      bool Open(const char* path, int flags) {
+        Close();
+        if (fs != nullptr && fs->FileOpen(&file, path, flags) == LFS_ERR_OK) {
+          isOpen = true;
+          return true;
+        }
+        return false;
+      }
+
+      void Close() {
+        if (isOpen && fs != nullptr) {
+          fs->FileClose(&file);
+          isOpen = false;
+        }
+      }
+
+      bool IsOpen() const { return isOpen; }
+      lfs_file_t* Get() { return &file; }
+
+      int Read(void* buffer, size_t size) {
+        return isOpen ? fs->FileRead(&file, static_cast<uint8_t*>(buffer), size) : -1;
+      }
+
+      int Write(const void* buffer, size_t size) {
+        return isOpen ? fs->FileWrite(&file, static_cast<const uint8_t*>(buffer), size) : -1;
+      }
+
+      int Seek(lfs_soff_t offset) {
+        return isOpen ? fs->FileSeek(&file, offset) : -1;
+      }
+
+    private:
+      FS* fs;
+      lfs_file_t file;
+      bool isOpen;
+    };
+
     class MotionController {
     public:
       enum class DeviceTypes {
