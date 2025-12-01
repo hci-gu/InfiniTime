@@ -47,7 +47,6 @@ namespace Pinetime {
                        NotificationManager& notificationManager,
                        Battery& batteryController,
                        Pinetime::Drivers::SpiNorFlash& spiNorFlash,
-                       HeartRateController& heartRateController,
                        MotionController& motionController,
                        FS& fs);
       void Init();

@@ -142,6 +142,16 @@ namespace Pinetime {
 
       void ClearMinuteAverageLog();
 
+      // BLE data access methods
+      struct MinuteEntryData {
+        int32_t acceleration;
+        int16_t heartRate;
+        uint32_t timestamp;
+      };
+      size_t GetStoredEntryCount() const;
+      bool ReadStoredEntry(size_t index, MinuteEntryData& entry);
+      void FlushAndClearStoredData();
+
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
       uint32_t currentTripSteps = 0;

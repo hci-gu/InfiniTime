@@ -8,10 +8,7 @@ using namespace Pinetime::Controllers;
 
 void HeartRateController::Update(HeartRateController::States newState, uint8_t heartRate) {
   this->state = newState;
-  if (this->heartRate != heartRate) {
-    this->heartRate = heartRate;
-    service->OnNewHeartRateValue(heartRate);
-  }
+  this->heartRate = heartRate;
 
   if (motionController != nullptr && newState == States::Running && heartRate > 0) {
     motionController->AddHeartRateSample(xTaskGetTickCount(), heartRate);
@@ -34,10 +31,6 @@ void HeartRateController::Disable() {
 
 void HeartRateController::SetHeartRateTask(Pinetime::Applications::HeartRateTask* task) {
   this->task = task;
-}
-
-void HeartRateController::SetService(Pinetime::Controllers::HeartRateService* service) {
-  this->service = service;
 }
 
 void HeartRateController::SetMotionController(Pinetime::Controllers::MotionController* motionController) {

@@ -28,7 +28,6 @@ NimbleController::NimbleController(Pinetime::System::SystemTask& systemTask,
                                    NotificationManager& notificationManager,
                                    Battery& batteryController,
                                    Pinetime::Drivers::SpiNorFlash& spiNorFlash,
-                                   HeartRateController& heartRateController,
                                    MotionController& motionController,
                                    FS& fs)
   : systemTask {systemTask},
@@ -46,7 +45,7 @@ NimbleController::NimbleController(Pinetime::System::SystemTask& systemTask,
     weatherService {dateTimeController},
     batteryInformationService {batteryController},
     immediateAlertService {systemTask, notificationManager},
-    heartRateService {*this, heartRateController},
+    heartRateService {*this, motionController},
     motionService {*this, motionController},
     fsService {systemTask, fs},
     serviceDiscovery({&currentTimeClient, &alertNotificationClient}) {
@@ -158,12 +157,9 @@ void NimbleController::StartAdvertising() {
   }
 
   fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-  fields.uuids16 = &HeartRateService::heartRateServiceUuid;
-  fields.num_uuids16 = 1;
-  fields.uuids16_is_complete = 1;
-  fields.uuids128 = &DfuService::serviceUuid;
+  fields.uuids128 = &HeartRateService::accelDataServiceUuid;
   fields.num_uuids128 = 1;
-  fields.uuids128_is_complete = 1;
+  fields.uuids128_is_complete = 0; // Not complete, DFU service also advertised
   fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
   rsp_fields.name = reinterpret_cast<const uint8_t*>(deviceName);

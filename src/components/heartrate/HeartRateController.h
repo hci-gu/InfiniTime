@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <components/ble/HeartRateService.h>
 
 namespace Pinetime {
   namespace Applications {
@@ -34,14 +33,12 @@ namespace Pinetime {
         return heartRate;
       }
 
-      void SetService(Pinetime::Controllers::HeartRateService* service);
       void SetMotionController(MotionController* motionController);
 
     private:
       Applications::HeartRateTask* task = nullptr;
       States state = States::Stopped;
       uint8_t heartRate = 0;
-      Pinetime::Controllers::HeartRateService* service = nullptr;
       MotionController* motionController = nullptr;
     };
   }

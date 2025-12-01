@@ -726,3 +726,76 @@ void MotionController::LoadMinuteAverageLog() {
 
   fs->FileClose(&file);
 }
+
+size_t MotionController::GetStoredEntryCount() const {
+  return minuteAverageCount;
+}
+
+bool MotionController::ReadStoredEntry(size_t index, MinuteEntryData& entry) {
+  if (index >= minuteAverageCount) {
+    return false;
+  }
+
+  // Check if entry is in disk storage
+  if (index < diskEntryCount) {
+    if (fs == nullptr || !storageAccessible) {
+      return false;
+    }
+
+    ScopedFile file(fs);
+    if (!file.Open(minuteAverageFile, LFS_O_RDONLY)) {
+      return false;
+    }
+
+    // Skip header
+    struct Header {
+      uint32_t version;
+      uint32_t count;
+      int64_t totalAcceleration;
+      int64_t totalHeartRate;
+      uint32_t heartRateSampleCount;
+    };
+
+    struct DiskEntry {
+      int32_t acceleration;
+      int16_t heartRate;
+      uint32_t timestamp;
+    };
+
+    // Seek to the entry position
+    if (file.Seek(sizeof(Header) + index * sizeof(DiskEntry)) < 0) {
+      return false;
+    }
+
+    DiskEntry diskEntry {};
+    if (file.Read(&diskEntry, sizeof(diskEntry)) != sizeof(diskEntry)) {
+      return false;
+    }
+
+    entry.acceleration = diskEntry.acceleration;
+    entry.heartRate = diskEntry.heartRate;
+    entry.timestamp = diskEntry.timestamp;
+    return true;
+  }
+
+  // Entry is in the in-memory buffer
+  size_t bufferIndex = index - diskEntryCount;
+  if (bufferIndex >= inMemoryBufferCount) {
+    return false;
+  }
+
+  entry.acceleration = inMemoryBuffer[bufferIndex].acceleration;
+  entry.heartRate = inMemoryBuffer[bufferIndex].heartRate;
+  entry.timestamp = inMemoryBuffer[bufferIndex].timestamp;
+  return true;
+}
+
+void MotionController::FlushAndClearStoredData() {
+  // First flush any pending in-memory data to disk
+  if (inMemoryBufferCount > 0 && storageAccessible) {
+    FlushBufferToDisk();
+  }
+
+  // Then clear everything
+  ClearMinuteAverageLog();
+}

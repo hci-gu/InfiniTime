@@ -80,7 +80,6 @@ SystemTask::SystemTask(Drivers::SpiMaster& spi,
                      notificationManager,
                      batteryController,
                      spiNorFlash,
-                     heartRateController,
                      motionController,
                      fs) {
 }
