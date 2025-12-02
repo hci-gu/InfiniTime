@@ -227,7 +227,7 @@ namespace Pinetime {
       // Timer flushes every 5 minutes, so 10 minutes provides a safety margin
       static constexpr size_t inMemoryBufferSize = 10;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 5;  // v5: Changed from magnitude average to Counts
+      static constexpr uint32_t minuteAverageLogVersion = 6;  // v6: Fixed struct packing for disk storage
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 

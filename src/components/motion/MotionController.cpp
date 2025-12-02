@@ -11,6 +11,22 @@
 using namespace Pinetime::Controllers;
 
 namespace {
+  // Packed structs for consistent binary layout on disk
+  // These MUST be packed to avoid platform-dependent alignment padding
+  struct __attribute__((packed)) DiskHeader {
+    uint32_t version;
+    uint32_t count;
+    double totalCounts;
+    int64_t totalHeartRate;
+    uint32_t heartRateSampleCount;
+  };
+
+  struct __attribute__((packed)) DiskEntry {
+    float counts;
+    int16_t heartRate;
+    uint32_t timestamp;
+  };
+
   constexpr inline int32_t Clamp(int32_t val, int32_t min, int32_t max) {
     return val < min ? min : (val > max ? max : val);
   }
@@ -439,13 +455,7 @@ void MotionController::FlushBufferToDisk() {
       return;
     }
 
-    struct Header {
-      uint32_t version;
-      uint32_t count;
-      double totalCounts;
-      int64_t totalHeartRate;
-      uint32_t heartRateSampleCount;
-    } header {
+    DiskHeader header {
       minuteAverageLogVersion,
       static_cast<uint32_t>(inMemoryBufferCount),
       minuteAverageTotal,
@@ -458,11 +468,6 @@ void MotionController::FlushBufferToDisk() {
     }
 
     // Write all buffered entries
-    struct DiskEntry {
-      float counts;
-      int16_t heartRate;
-      uint32_t timestamp;
-    };
 
     for (size_t i = 0; i < inMemoryBufferCount; ++i) {
       DiskEntry entry {inMemoryBuffer[i].counts, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
@@ -483,13 +488,7 @@ void MotionController::FlushBufferToDisk() {
     return;
   }
 
-  struct Header {
-    uint32_t version;
-    uint32_t count;
-    double totalCounts;
-    int64_t totalHeartRate;
-    uint32_t heartRateSampleCount;
-  } header {};
+  DiskHeader header {};
 
   if (file.Read(&header, sizeof(header)) != sizeof(header)) {
     return; // ScopedFile destructor will close
@@ -510,12 +509,7 @@ void MotionController::FlushBufferToDisk() {
   }
 
   // Seek to end to append new entries
-  struct DiskEntry {
-    float counts;
-    int16_t heartRate;
-    uint32_t timestamp;
-  };
-  if (file.Seek(sizeof(Header) + diskEntryCount * sizeof(DiskEntry)) < 0) {
+  if (file.Seek(sizeof(DiskHeader) + diskEntryCount * sizeof(DiskEntry)) < 0) {
     return; // ScopedFile destructor will close
   }
 
@@ -548,23 +542,11 @@ void MotionController::TruncateDiskLogIfNeeded() {
     return;
   }
 
-  struct Header {
-    uint32_t version;
-    uint32_t count;
-    double totalCounts;
-    int64_t totalHeartRate;
-    uint32_t heartRateSampleCount;
-  } oldHeader {};
+  DiskHeader oldHeader {};
 
   if (file.Read(&oldHeader, sizeof(oldHeader)) != sizeof(oldHeader)) {
     return; // ScopedFile destructor will close
   }
-
-  struct DiskEntry {
-    float counts;
-    int16_t heartRate;
-    uint32_t timestamp;
-  };
 
   // Calculate new totals by reading and subtracting removed entries
   double removedCountsTotal = 0.0;
@@ -599,7 +581,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
   size_t newDiskHrCount = 0;
 
   // Write placeholder header (will update after streaming entries)
-  Header newHeader {
+  DiskHeader newHeader {
     minuteAverageLogVersion,
     static_cast<uint32_t>(remainingEntries),
     0.0, 0, 0  // Will be updated
@@ -713,13 +695,7 @@ void MotionController::LoadMinuteAverageLog() {
     return;
   }
 
-  struct Header {
-    uint32_t version;
-    uint32_t count;
-    double totalCounts;
-    int64_t totalHeartRate;
-    uint32_t heartRateSampleCount;
-  } header {};
+  DiskHeader header {};
 
   if (fs->FileRead(&file, reinterpret_cast<uint8_t*>(&header), sizeof(header)) != sizeof(header)) {
     fs->FileClose(&file);
@@ -763,23 +739,8 @@ bool MotionController::ReadStoredEntry(size_t index, MinuteEntryData& entry) {
       return false;
     }
 
-    // Skip header
-    struct Header {
-      uint32_t version;
-      uint32_t count;
-      double totalCounts;
-      int64_t totalHeartRate;
-      uint32_t heartRateSampleCount;
-    };
-
-    struct DiskEntry {
-      float counts;
-      int16_t heartRate;
-      uint32_t timestamp;
-    };
-
-    // Seek to the entry position
-    if (file.Seek(sizeof(Header) + index * sizeof(DiskEntry)) < 0) {
+    // Seek to the entry position (skip header)
+    if (file.Seek(sizeof(DiskHeader) + index * sizeof(DiskEntry)) < 0) {
       return false;
     }
 

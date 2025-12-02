@@ -20,7 +20,10 @@ namespace Pinetime {
       constexpr float adcResolution = 0.0164f;
       constexpr int integN = 10;
       constexpr int filtfiltEdge = 27;
-      constexpr float scale = 1.0f / 1024.0f; // Convert binary milli-g to g
+      // Convert binary milli-g to g, then divide by 9.82 to match original algorithm's m/s² to g conversion
+      constexpr float scale = 1.0f / (1024.0f * 9.82f);
+      // Compensation factor for 10Hz vs 30Hz sample rate (3x fewer samples = 3x lower counts)
+      constexpr float sampleRateCompensation = 3.0f;
 
       /**
        * Forward IIR filter (8th order)
@@ -313,7 +316,8 @@ namespace Pinetime {
       float y = ProcessAxis(rawY, length);
       float z = ProcessAxis(rawZ, length);
       
-      return std::sqrt(x * x + y * y + z * z);
+      // Apply sample rate compensation (10Hz vs original 30Hz)
+      return std::sqrt(x * x + y * y + z * z) * sampleRateCompensation;
     }
   } // namespace Utility
 } // namespace Pinetime
