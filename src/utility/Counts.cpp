@@ -5,6 +5,7 @@
 
 namespace Pinetime {
   namespace Utility {
+    
     namespace {
       // Filter initial response for 8th order filter
       constexpr float zi[9] = {
@@ -13,62 +14,13 @@ namespace Pinetime {
         0.07533559105142006f, 0.07533478851866574f, 0.0f
       };
 
-      // Zero initial conditions for 20th order filter
-      constexpr float zi_zeros[21] = {0};
-
-      // Filter coefficients for 8th order filter (filterAB2)
-      constexpr float b2[9] = {
-        0.0753349039750657f, 0.0f, -0.3013396159002628f, 0.0f,
-        0.4520094238503942f, 0.0f, -0.3013396159002628f, 0.0f,
-        0.0753349039750657f
-      };
-
-      constexpr float a2[9] = {
-        1.0f, -4.2575497111306f, 7.543176557521139f, -7.64673626503976f,
-        5.33187310787808f, -2.7027389238066353f, 0.8452545660100996f,
-        -0.1323148049950936f, 0.019035473586069288f
-      };
-
-      // Filter coefficients for 20th order filter (filterAB)
-      constexpr float b1[21] = {
-        0.047390185f, -0.1185406f, 0.13853539999999998f, -0.10874584999999999f,
-        0.05192086f, -0.01952195f, 0.0061545770000000005f, 0.017865045f,
-        -0.03681861f, 0.047021555f, -0.050736804999999996f, 0.046172355f,
-        -0.044404475f, 0.035013095f, -0.012522805f, -0.0044642829999999994f,
-        0.012385774999999998f, -0.009048032999999999f, 0.0033278025f,
-        -0.0007813798f, -0.00018936195f
-      };
-
-      constexpr float a1[21] = {
-        1.0f, -4.1637f, 7.5712f, -7.9805f, 5.385f, -2.4636f, 0.89238f,
-        0.06361f, -1.3481f, 2.4734f, -2.9257f, 2.9298f, -2.7816f,
-        2.4777f, -1.6847f, 0.46483f, 0.46565f, -0.67312f, 0.4162f,
-        -0.13832f, 0.019852f
-      };
-
       // Constants for counts calculation
       constexpr float deadband = 0.068f;
       constexpr float peakThreshold = 2.13f;
       constexpr float adcResolution = 0.0164f;
       constexpr int integN = 10;
-
-      /**
-       * Odd extension of signal for edge handling in filtfilt
-       */
-      void oddExt(const float* x, size_t xLen, int n, float* result) {
-        // Left extension: 2*x[0] - x[n-1-i] for i in [0, n)
-        for (int i = 0; i < n; i++) {
-          result[i] = 2.0f * x[0] - x[n - 1 - i];
-        }
-
-        // Copy original data
-        std::memcpy(result + n, x, xLen * sizeof(float));
-
-        // Right extension: 2*x[xLen-1] - x[xLen-1-n+i] for i in [0, n)
-        for (int i = 0; i < n; i++) {
-          result[xLen + n + i] = 2.0f * x[xLen - 1] - x[xLen - 1 - n + i];
-        }
-      }
+      constexpr int filtfiltEdge = 27;
+      constexpr float scale = 1.0f / 1024.0f; // Convert binary milli-g to g
 
       /**
        * Forward IIR filter (8th order)
@@ -84,7 +36,6 @@ namespace Pinetime {
           x0[i] = data[i];
         }
 
-        // Initial samples (i < 9)
         for (int i = 0; i < 9 && i < static_cast<int>(length); i++) {
           if (i >= 8) z[7] = 0.0753349039750657f * x0[i - 8] - 0.019035473586069288f * data[i - 8] + z[8];
           if (i >= 7) z[6] = 0.1323148049950936f * data[i - 7] + z[7];
@@ -94,11 +45,9 @@ namespace Pinetime {
           if (i >= 3) z[2] = 7.64673626503976f * data[i - 3] + z[3];
           if (i >= 2) z[1] = -0.3013396159002628f * x0[i - 2] - 7.543176557521139f * data[i - 2] + z[2];
           if (i >= 1) z[0] = 4.2575497111306f * data[i - 1] + z[1];
-
           data[i] = 0.0753349039750657f * data[i] + z[0];
         }
 
-        // Main loop (i >= 9)
         float yi8 = data[0], yi7 = data[1], yi6 = data[2], yi5 = data[3];
         float yi4 = data[4], yi3 = data[5], yi2 = data[6], yi1 = data[7];
         float xi8 = x0[0], xi7 = x0[1], xi6 = x0[2], xi5 = x0[3];
@@ -141,7 +90,6 @@ namespace Pinetime {
           x0[i] = data[length - 9 + i];
         }
 
-        // Initial samples from the end
         for (int i = 0; i < 9; i++) {
           int idx = static_cast<int>(length) - 1 - i;
           if (i >= 8) z[7] = 0.0753349039750657f * x0[8 - i + 8] - 0.019035473586069288f * data[idx + 8] + z[8];
@@ -152,11 +100,9 @@ namespace Pinetime {
           if (i >= 3) z[2] = 7.64673626503976f * data[idx + 3] + z[3];
           if (i >= 2) z[1] = -0.3013396159002628f * x0[8 - i + 2] - 7.543176557521139f * data[idx + 2] + z[2];
           if (i >= 1) z[0] = 4.2575497111306f * data[idx + 1] + z[1];
-
           data[idx] = 0.0753349039750657f * x0[8 - i] + z[0];
         }
 
-        // Main loop in reverse
         float yi8 = data[length - 1], yi7 = data[length - 2], yi6 = data[length - 3], yi5 = data[length - 4];
         float yi4 = data[length - 5], yi3 = data[length - 6], yi2 = data[length - 7], yi1 = data[length - 8];
         float xi8 = x0[8], xi7 = x0[7], xi6 = x0[6], xi5 = x0[5];
@@ -187,31 +133,6 @@ namespace Pinetime {
       }
 
       /**
-       * Forward-backward (zero-phase) filtering with 8th order filter
-       */
-      void filtfilt(const float* input, size_t inputLen, float* output) {
-        constexpr int edge = 27;
-        size_t extLen = inputLen + 2 * edge;
-
-        // Allocate extended buffer
-        float* extended = new float[extLen];
-
-        // Odd extension
-        oddExt(input, inputLen, edge, extended);
-
-        // Forward filter
-        filterAB2Forward(extended, extLen);
-
-        // Reverse filter
-        filterAB2Reverse(extended, extLen);
-
-        // Copy result (remove padding)
-        std::memcpy(output, extended + edge, inputLen * sizeof(float));
-
-        delete[] extended;
-      }
-
-      /**
        * Forward IIR filter (20th order)
        */
       void filterAB(float* data, size_t length) {
@@ -222,7 +143,6 @@ namespace Pinetime {
           x0[i] = data[i];
         }
 
-        // Initial samples (i < 21)
         for (int i = 0; i < 21 && i < static_cast<int>(length); i++) {
           if (i >= 20) z[19] = -0.00018936195f * x0[i - 20] - 0.019852f * data[i - 20] + z[20];
           if (i >= 19) z[18] = -0.0007813798f * x0[i - 19] + 0.13832f * data[i - 19] + z[19];
@@ -244,11 +164,9 @@ namespace Pinetime {
           if (i >= 3) z[2] = -0.10874584999999999f * x0[i - 3] + 7.9805f * data[i - 3] + z[3];
           if (i >= 2) z[1] = 0.13853539999999998f * x0[i - 2] - 7.5712f * data[i - 2] + z[2];
           if (i >= 1) z[0] = -0.1185406f * x0[i - 1] + 4.1637f * data[i - 1] + z[1];
-
           data[i] = 0.047390185f * x0[i] + z[0];
         }
 
-        // Main loop (i >= 21)
         float yi20 = data[0], yi19 = data[1], yi18 = data[2], yi17 = data[3];
         float yi16 = data[4], yi15 = data[5], yi14 = data[6], yi13 = data[7];
         float yi12 = data[8], yi11 = data[9], yi10 = data[10], yi9 = data[11];
@@ -263,7 +181,6 @@ namespace Pinetime {
 
         for (size_t i = 21; i < length; i++) {
           float za = z[20];
-
           za = -0.00018936195f * xi20 - 0.019852f * yi20 + za;
           za = -0.0007813798f * xi19 + 0.13832f * yi19 + za;
           za = 0.0033278025f * xi18 - 0.4162f * yi18 + za;
@@ -312,67 +229,90 @@ namespace Pinetime {
 
         for (size_t n = 0; n < cnt; n++) {
           float rs = 0.0f;
-          for (int p = length * n; p < length * (n + 1); p++) {
-            if (static_cast<size_t>(p) < dataLen && data[p] >= threshold) {
+          for (size_t p = length * n; p < length * (n + 1) && p < dataLen; p++) {
+            if (data[p] >= threshold) {
               rs += data[p] - threshold;
             }
           }
           total += rs;
         }
-
         return total;
-      }
-
-      /**
-       * Get counts for a single axis
-       */
-      float getCounts(const float* values, size_t length) {
-        // Allocate working buffer
-        float* filtered = new float[length];
-
-        // Apply filtfilt (forward-backward 8th order filter)
-        filtfilt(values, length, filtered);
-
-        // Apply 20th order filter
-        filterAB(filtered, length);
-
-        // Downsample by 3, clip to peak threshold, apply deadband and quantize
-        size_t downsampledLen = (length + 2) / 3;
-        float* processed = new float[downsampledLen];
-
-        size_t j = 0;
-        for (size_t i = 0; i < length; i += 3) {
-          float d = filtered[i];
-
-          // Clip to peak threshold
-          if (d < -peakThreshold) d = -peakThreshold;
-          else if (d > peakThreshold) d = peakThreshold;
-
-          // Apply deadband and quantize
-          float absD = std::fabs(d);
-          if (absD < deadband) {
-            processed[j] = 0.0f;
-          } else {
-            processed[j] = std::floor(absD / adcResolution);
-          }
-          j++;
-        }
-
-        // Calculate running sum
-        float result = runsum(processed, j, integN, 0.0f);
-
-        delete[] filtered;
-        delete[] processed;
-
-        return result;
       }
     } // anonymous namespace
 
-    float CalculateCounts(const float* accX, const float* accY, const float* accZ, size_t length) {
-      float x = getCounts(accX, length);
-      float y = getCounts(accY, length);
-      float z = getCounts(accZ, length);
+    // Static buffer definitions
+    float CountsCalculator::workBuffer[CountsCalculator::extendedLength];
+    float CountsCalculator::downsampleBuffer[CountsCalculator::downsampledLength];
 
+    float CountsCalculator::ProcessAxis(const int16_t* rawData, size_t length) {
+      // Convert int16_t to float (g units) in workBuffer
+      // workBuffer has extendedLength which is > maxInputLength, so this is safe
+      for (size_t i = 0; i < length; i++) {
+        workBuffer[i] = static_cast<float>(rawData[i]) * scale;
+      }
+      
+      // Apply filtfilt - we need to extend the signal for edge handling
+      // Use a temporary approach: extend into workBuffer from the converted data
+      size_t extLen = length + 2 * filtfiltEdge;
+      
+      // Create extended signal in-place by shifting and adding edges
+      // First, shift the data to make room for the leading edge extension
+      for (size_t i = length; i > 0; i--) {
+        workBuffer[filtfiltEdge + i - 1] = workBuffer[i - 1];
+      }
+      
+      // Add leading edge extension (odd reflection)
+      for (int i = 0; i < filtfiltEdge; i++) {
+        workBuffer[i] = 2.0f * workBuffer[filtfiltEdge] - workBuffer[2 * filtfiltEdge - 1 - i];
+      }
+      
+      // Add trailing edge extension (odd reflection)
+      for (int i = 0; i < filtfiltEdge; i++) {
+        workBuffer[filtfiltEdge + length + i] = 2.0f * workBuffer[filtfiltEdge + length - 1] - 
+                                                 workBuffer[filtfiltEdge + length - 2 - i];
+      }
+      
+      // Apply forward and reverse 8th order filter
+      filterAB2Forward(workBuffer, extLen);
+      filterAB2Reverse(workBuffer, extLen);
+      
+      // The result is in workBuffer[filtfiltEdge ... filtfiltEdge+length-1]
+      // Apply 20th order filter in-place on this region
+      filterAB(workBuffer + filtfiltEdge, length);
+      
+      // Downsample by 3, clip, deadband, quantize into downsampleBuffer
+      size_t j = 0;
+      for (size_t i = 0; i < length; i += 3) {
+        float d = workBuffer[filtfiltEdge + i];
+        
+        // Clip to peak threshold
+        if (d < -peakThreshold) d = -peakThreshold;
+        else if (d > peakThreshold) d = peakThreshold;
+        
+        // Apply deadband and quantize
+        float absD = std::fabs(d);
+        if (absD < deadband) {
+          downsampleBuffer[j] = 0.0f;
+        } else {
+          downsampleBuffer[j] = std::floor(absD / adcResolution);
+        }
+        j++;
+      }
+      
+      // Calculate running sum
+      return runsum(downsampleBuffer, j, integN, 0.0f);
+    }
+
+    float CountsCalculator::Calculate(const int16_t* rawX, const int16_t* rawY, const int16_t* rawZ, size_t length) {
+      if (length == 0 || length > maxInputLength) {
+        return 0.0f;
+      }
+      
+      // Process each axis sequentially, reusing workBuffer for each
+      float x = ProcessAxis(rawX, length);
+      float y = ProcessAxis(rawY, length);
+      float z = ProcessAxis(rawZ, length);
+      
       return std::sqrt(x * x + y * y + z * z);
     }
   } // namespace Utility

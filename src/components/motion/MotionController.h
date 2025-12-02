@@ -10,6 +10,7 @@
 #include "components/datetime/DateTimeController.h"
 #include "components/fs/FS.h"
 #include "utility/CircularBuffer.h"
+#include "utility/Counts.h"
 
 namespace Pinetime {
   namespace Controllers {
@@ -110,7 +111,6 @@ namespace Pinetime {
         return accumulatedSpeed;
       }
 
-      int32_t AverageAccelerationLastMinute();
       void AddHeartRateSample(TickType_t timestamp, uint16_t heartRate);
 
       DeviceTypes DeviceType() const {
@@ -134,7 +134,7 @@ namespace Pinetime {
         return minuteAverageCount;
       }
 
-      int32_t LoggedMinutesAverage() const;
+      float LoggedMinutesAverage() const;
       int32_t LoggedMinutesHeartRateAverage() const;
       bool HasLoggedHeartRateAverage() const {
         return minuteHeartRateSampleCount > 0;
@@ -148,7 +148,7 @@ namespace Pinetime {
 
       // BLE data access methods
       struct MinuteEntryData {
-        int32_t acceleration;
+        float counts;
         int16_t heartRate;
         uint32_t timestamp;
       };
@@ -167,31 +167,26 @@ namespace Pinetime {
       TickType_t lastTime = 0;
       TickType_t time = 0;
 
-      struct AccelSample {
-        TickType_t timestamp = 0;
-        int32_t magnitude = 0;
-      };
-
       struct HeartRateSample {
         TickType_t timestamp = 0;
         uint16_t value = 0;
       };
 
-      void AddAccelerationSample(TickType_t timestamp, int32_t magnitude);
-      void PruneOldAccelerationSamples(TickType_t currentTimestamp);
+      void AddAccelerationSample(TickType_t timestamp, int16_t x, int16_t y, int16_t z);
       void PruneOldHeartRateSamplesLocked(TickType_t currentTimestamp);
 
+      // Raw X/Y/Z samples for Counts calculation (circular buffer)
+      // Stored as int16_t in binary milli-g format (1g = 1024)
       static constexpr size_t accelSamplesWindow = 600; // 10Hz * 60s
-      // Heart-rate readings arrive far less frequently than acceleration (typically 1Hz).
-      // Keeping a full 60s history for up to ~4 samples per second keeps memory usage low
-      // enough to avoid boot-time allocation failures while still covering the full minute.
-      static constexpr size_t heartRateSamplesWindow = 240;
-      std::array<AccelSample, accelSamplesWindow> accelSamples = {};
-      size_t accelSampleHead = 0;
-      size_t accelSampleTail = 0;
-      size_t accelSampleCount = 0;
-      int64_t accelSampleTotal = 0;
+      std::array<int16_t, accelSamplesWindow> rawXSamples = {};
+      std::array<int16_t, accelSamplesWindow> rawYSamples = {};
+      std::array<int16_t, accelSamplesWindow> rawZSamples = {};
+      size_t rawSampleHead = 0;
+      size_t rawSampleCount = 0;
 
+      // Heart-rate readings arrive less frequently than acceleration (typically 1Hz).
+      // 60 samples covers a full minute at 1Hz.
+      static constexpr size_t heartRateSamplesWindow = 60;
       std::array<HeartRateSample, heartRateSamplesWindow> heartRateSamples = {};
       size_t heartRateSampleHead = 0;
       size_t heartRateSampleTail = 0;
@@ -232,12 +227,12 @@ namespace Pinetime {
       // Timer flushes every 5 minutes, so 10 minutes provides a safety margin
       static constexpr size_t inMemoryBufferSize = 10;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
-      static constexpr uint32_t minuteAverageLogVersion = 4;
+      static constexpr uint32_t minuteAverageLogVersion = 5;  // v5: Changed from magnitude average to Counts
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
 
       struct MinuteEntry {
-        int32_t acceleration = 0;
+        float counts = 0.0f;
         int16_t heartRate = 0;
         uint32_t timestamp = 0;
       };
@@ -252,7 +247,7 @@ namespace Pinetime {
       // Running totals (disk + in-memory combined) for computing averages
       size_t diskEntryCount = 0;        // Number of entries stored on disk
       size_t minuteAverageCount = 0;    // Total entries (disk + in-memory)
-      int64_t minuteAverageTotal = 0;   // Sum of all acceleration values
+      double minuteAverageTotal = 0.0;  // Sum of all counts values
       int64_t minuteHeartRateTotal = 0; // Sum of all heart rate values
       size_t minuteHeartRateSampleCount = 0; // Count of non-zero heart rate entries
       TickType_t lastLoggedMinuteTick = 0;
@@ -263,9 +258,9 @@ namespace Pinetime {
       void LoadMinuteAverageLog();
       void FlushBufferToDisk();
       void EnsureLogDirectory();
-      void AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage, uint32_t timestamp);
+      void AppendMinuteAverage(float counts, int32_t heartRateAverage, uint32_t timestamp);
       void MaybeStoreMinuteAverage(TickType_t timestamp);
-      int32_t AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp);
+      float CalculateCountsFromRawSamples();
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
       void TruncateDiskLogIfNeeded();
     };

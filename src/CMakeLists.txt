@@ -495,6 +495,7 @@ list(APPEND SOURCE_FILES
         touchhandler/TouchHandler.cpp
 
         utility/Math.cpp
+        utility/Counts.cpp
         )
 
 list(APPEND RECOVERY_SOURCE_FILES
@@ -563,6 +564,7 @@ list(APPEND RECOVERY_SOURCE_FILES
         touchhandler/TouchHandler.cpp
 
         utility/Math.cpp
+        utility/Counts.cpp
         )
 
 list(APPEND RECOVERYLOADER_SOURCE_FILES

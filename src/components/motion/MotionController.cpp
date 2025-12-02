@@ -79,7 +79,8 @@ void MotionController::Update(int16_t x, int16_t y, int16_t z, uint32_t nbSteps)
 
   int64_t magnitudeSquared = static_cast<int64_t>(x) * x + static_cast<int64_t>(y) * y + static_cast<int64_t>(z) * z;
   int32_t magnitude = static_cast<int32_t>(std::sqrt(static_cast<double>(magnitudeSquared)));
-  AddAccelerationSample(time, magnitude);
+  (void)magnitude; // No longer used for averaging, kept for potential future use
+  AddAccelerationSample(time, x, y, z);
 
   int32_t deltaSteps = nbSteps - oldSteps;
   if (deltaSteps > 0) {
@@ -88,17 +89,12 @@ void MotionController::Update(int16_t x, int16_t y, int16_t z, uint32_t nbSteps)
   SetSteps(Days::Today, nbSteps);
 }
 
-int32_t MotionController::AverageAccelerationLastMinute() {
-  TickType_t now = xTaskGetTickCount();
-  return AverageAccelerationLastMinuteInternal(now);
-}
-
-int32_t MotionController::LoggedMinutesAverage() const {
+float MotionController::LoggedMinutesAverage() const {
   if (minuteAverageCount == 0) {
-    return 0;
+    return 0.0f;
   }
 
-  return static_cast<int32_t>(minuteAverageTotal / static_cast<int64_t>(minuteAverageCount));
+  return static_cast<float>(minuteAverageTotal / static_cast<double>(minuteAverageCount));
 }
 
 int32_t MotionController::LoggedMinutesHeartRateAverage() const {
@@ -117,7 +113,7 @@ void MotionController::ClearMinuteAverageLog() {
   // Clear running totals
   diskEntryCount = 0;
   minuteAverageCount = 0;
-  minuteAverageTotal = 0;
+  minuteAverageTotal = 0.0;
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
 
@@ -230,21 +226,16 @@ void MotionController::OnStorageSleep() {
   storageAccessible = false;
 }
 
-void MotionController::AddAccelerationSample(TickType_t timestamp, int32_t magnitude) {
-  if (accelSampleCount == accelSamplesWindow) {
-    accelSampleTotal -= accelSamples[accelSampleTail].magnitude;
-    accelSampleTail = (accelSampleTail + 1) % accelSamplesWindow;
-    accelSampleCount--;
+void MotionController::AddAccelerationSample(TickType_t timestamp, int16_t x, int16_t y, int16_t z) {
+  // Store raw X/Y/Z samples for Counts calculation (circular buffer)
+  rawXSamples[rawSampleHead] = x;
+  rawYSamples[rawSampleHead] = y;
+  rawZSamples[rawSampleHead] = z;
+  rawSampleHead = (rawSampleHead + 1) % accelSamplesWindow;
+  if (rawSampleCount < accelSamplesWindow) {
+    rawSampleCount++;
   }
 
-  accelSamples[accelSampleHead].timestamp = timestamp;
-  accelSamples[accelSampleHead].magnitude = magnitude;
-  accelSampleHead = (accelSampleHead + 1) % accelSamplesWindow;
-
-  accelSampleCount++;
-  accelSampleTotal += magnitude;
-
-  PruneOldAccelerationSamples(timestamp);
   MaybeStoreMinuteAverage(timestamp);
 }
 
@@ -273,22 +264,6 @@ void MotionController::AddHeartRateSample(TickType_t timestamp, uint16_t heartRa
   taskEXIT_CRITICAL();
 }
 
-void MotionController::PruneOldAccelerationSamples(TickType_t currentTimestamp) {
-  constexpr TickType_t window = configTICK_RATE_HZ * 60;
-
-  while (accelSampleCount > 0) {
-    const auto& oldest = accelSamples[accelSampleTail];
-    TickType_t age = currentTimestamp - oldest.timestamp;
-    if (age <= window) {
-      break;
-    }
-
-    accelSampleTotal -= oldest.magnitude;
-    accelSampleTail = (accelSampleTail + 1) % accelSamplesWindow;
-    accelSampleCount--;
-  }
-}
-
 void MotionController::PruneOldHeartRateSamplesLocked(TickType_t currentTimestamp) {
   constexpr TickType_t window = configTICK_RATE_HZ * 60;
 
@@ -303,16 +278,6 @@ void MotionController::PruneOldHeartRateSamplesLocked(TickType_t currentTimestam
     heartRateSampleTail = (heartRateSampleTail + 1) % heartRateSamplesWindow;
     heartRateSampleCount--;
   }
-}
-
-int32_t MotionController::AverageAccelerationLastMinuteInternal(TickType_t currentTimestamp) {
-  PruneOldAccelerationSamples(currentTimestamp);
-
-  if (accelSampleCount == 0) {
-    return 0;
-  }
-
-  return static_cast<int32_t>(accelSampleTotal / static_cast<int64_t>(accelSampleCount));
 }
 
 int32_t MotionController::AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp) {
@@ -331,6 +296,41 @@ int32_t MotionController::AverageHeartRateLastMinuteInternal(TickType_t currentT
   return static_cast<int32_t>(total / count);
 }
 
+float MotionController::CalculateCountsFromRawSamples() {
+  if (rawSampleCount == 0) {
+    return 0.0f;
+  }
+
+  // The raw samples are stored in circular buffers. For Counts calculation,
+  // we need them linearized (oldest to newest).
+  // rawSampleHead points to where the next sample will be written.
+  // If buffer is full, oldest is at rawSampleHead; if not full, oldest is at 0.
+  size_t startIdx = (rawSampleCount == accelSamplesWindow) ? rawSampleHead : 0;
+
+  // If data is already linearized (starts at 0), we can use it directly
+  // Otherwise, we need to rotate in-place using std::rotate
+  if (startIdx != 0) {
+    std::rotate(rawXSamples.begin(), rawXSamples.begin() + startIdx, rawXSamples.begin() + rawSampleCount);
+    std::rotate(rawYSamples.begin(), rawYSamples.begin() + startIdx, rawYSamples.begin() + rawSampleCount);
+    std::rotate(rawZSamples.begin(), rawZSamples.begin() + startIdx, rawZSamples.begin() + rawSampleCount);
+  }
+
+  // Calculate counts from linearized int16_t data
+  // CountsCalculator handles conversion to float internally
+  float counts = Utility::CountsCalculator::Calculate(
+    rawXSamples.data(),
+    rawYSamples.data(),
+    rawZSamples.data(),
+    rawSampleCount
+  );
+
+  // Reset raw sample buffers for next minute
+  rawSampleHead = 0;
+  rawSampleCount = 0;
+
+  return counts;
+}
+
 void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
   if (fs == nullptr) {
     return;
@@ -345,10 +345,10 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
-  int32_t accelerationAverage = AverageAccelerationLastMinuteInternal(timestamp);
+  float counts = CalculateCountsFromRawSamples();
   int32_t heartRateAverage = AverageHeartRateLastMinuteInternal(timestamp);
 
-  if (accelerationAverage == 0 && accelSampleCount == 0) {
+  if (counts == 0.0f && rawSampleCount == 0) {
     lastLoggedMinuteTick = timestamp;
     return;
   }
@@ -373,11 +373,11 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     }
   }
 
-  AppendMinuteAverage(accelerationAverage, heartRateAverage, unixTimestamp);
+  AppendMinuteAverage(counts, heartRateAverage, unixTimestamp);
   lastLoggedMinuteTick = timestamp;
 }
 
-void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t heartRateAverage, uint32_t timestamp) {
+void MotionController::AppendMinuteAverage(float counts, int32_t heartRateAverage, uint32_t timestamp) {
   const int32_t clampedHeartRate = std::clamp<int32_t>(
     heartRateAverage, 0, static_cast<int32_t>(std::numeric_limits<int16_t>::max()));
   const int16_t storedHeartRate = static_cast<int16_t>(clampedHeartRate);
@@ -390,7 +390,7 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
     // This prevents buffer overflow - data loss is preferable to crash
     if (inMemoryBufferCount >= inMemoryBufferSize) {
       // Subtract oldest entry from running totals
-      minuteAverageTotal -= inMemoryBuffer[0].acceleration;
+      minuteAverageTotal -= inMemoryBuffer[0].counts;
       minuteAverageCount--;
       if (inMemoryBuffer[0].heartRate > 0) {
         minuteHeartRateTotal -= inMemoryBuffer[0].heartRate;
@@ -406,13 +406,13 @@ void MotionController::AppendMinuteAverage(int32_t accelerationAverage, int32_t 
   }
 
   // Add to in-memory buffer (now guaranteed to have space)
-  inMemoryBuffer[inMemoryBufferCount].acceleration = accelerationAverage;
+  inMemoryBuffer[inMemoryBufferCount].counts = counts;
   inMemoryBuffer[inMemoryBufferCount].heartRate = storedHeartRate;
   inMemoryBuffer[inMemoryBufferCount].timestamp = timestamp;
   inMemoryBufferCount++;
 
   // Update running totals
-  minuteAverageTotal += accelerationAverage;
+  minuteAverageTotal += counts;
   minuteAverageCount++;
   if (storedHeartRate > 0) {
     minuteHeartRateTotal += storedHeartRate;
@@ -442,7 +442,7 @@ void MotionController::FlushBufferToDisk() {
     struct Header {
       uint32_t version;
       uint32_t count;
-      int64_t totalAcceleration;
+      double totalCounts;
       int64_t totalHeartRate;
       uint32_t heartRateSampleCount;
     } header {
@@ -459,13 +459,13 @@ void MotionController::FlushBufferToDisk() {
 
     // Write all buffered entries
     struct DiskEntry {
-      int32_t acceleration;
+      float counts;
       int16_t heartRate;
       uint32_t timestamp;
     };
 
     for (size_t i = 0; i < inMemoryBufferCount; ++i) {
-      DiskEntry entry {inMemoryBuffer[i].acceleration, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
+      DiskEntry entry {inMemoryBuffer[i].counts, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
       if (file.Write(&entry, sizeof(entry)) != sizeof(entry)) {
         return; // ScopedFile destructor will close
       }
@@ -486,7 +486,7 @@ void MotionController::FlushBufferToDisk() {
   struct Header {
     uint32_t version;
     uint32_t count;
-    int64_t totalAcceleration;
+    double totalCounts;
     int64_t totalHeartRate;
     uint32_t heartRateSampleCount;
   } header {};
@@ -497,7 +497,7 @@ void MotionController::FlushBufferToDisk() {
 
   // Update header with new totals
   header.count = static_cast<uint32_t>(diskEntryCount + inMemoryBufferCount);
-  header.totalAcceleration = minuteAverageTotal;
+  header.totalCounts = minuteAverageTotal;
   header.totalHeartRate = minuteHeartRateTotal;
   header.heartRateSampleCount = static_cast<uint32_t>(minuteHeartRateSampleCount);
 
@@ -511,7 +511,7 @@ void MotionController::FlushBufferToDisk() {
 
   // Seek to end to append new entries
   struct DiskEntry {
-    int32_t acceleration;
+    float counts;
     int16_t heartRate;
     uint32_t timestamp;
   };
@@ -520,7 +520,7 @@ void MotionController::FlushBufferToDisk() {
   }
 
   for (size_t i = 0; i < inMemoryBufferCount; ++i) {
-    DiskEntry entry {inMemoryBuffer[i].acceleration, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
+    DiskEntry entry {inMemoryBuffer[i].counts, inMemoryBuffer[i].heartRate, inMemoryBuffer[i].timestamp};
     if (file.Write(&entry, sizeof(entry)) != sizeof(entry)) {
       return; // ScopedFile destructor will close
     }
@@ -551,7 +551,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
   struct Header {
     uint32_t version;
     uint32_t count;
-    int64_t totalAcceleration;
+    double totalCounts;
     int64_t totalHeartRate;
     uint32_t heartRateSampleCount;
   } oldHeader {};
@@ -561,13 +561,13 @@ void MotionController::TruncateDiskLogIfNeeded() {
   }
 
   struct DiskEntry {
-    int32_t acceleration;
+    float counts;
     int16_t heartRate;
     uint32_t timestamp;
   };
 
   // Calculate new totals by reading and subtracting removed entries
-  int64_t removedAccelTotal = 0;
+  double removedCountsTotal = 0.0;
   int64_t removedHeartRateTotal = 0;
   size_t removedHeartRateSamples = 0;
 
@@ -576,7 +576,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
     if (file.Read(&entry, sizeof(entry)) != sizeof(entry)) {
       break;
     }
-    removedAccelTotal += entry.acceleration;
+    removedCountsTotal += entry.counts;
     if (entry.heartRate > 0) {
       removedHeartRateTotal += entry.heartRate;
       removedHeartRateSamples++;
@@ -594,7 +594,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
   }
 
   // Calculate new totals for disk portion
-  int64_t newDiskAccelTotal = 0;
+  double newDiskCountsTotal = 0.0;
   int64_t newDiskHrTotal = 0;
   size_t newDiskHrCount = 0;
 
@@ -602,7 +602,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
   Header newHeader {
     minuteAverageLogVersion,
     static_cast<uint32_t>(remainingEntries),
-    0, 0, 0  // Will be updated
+    0.0, 0, 0  // Will be updated
   };
   if (newFile.Write(&newHeader, sizeof(newHeader)) != sizeof(newHeader)) {
     return; // Both ScopedFile destructors will close files
@@ -618,7 +618,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
     if (newFile.Write(&entry, sizeof(entry)) != sizeof(entry)) {
       return; // Both ScopedFile destructors will close files
     }
-    newDiskAccelTotal += entry.acceleration;
+    newDiskCountsTotal += entry.counts;
     if (entry.heartRate > 0) {
       newDiskHrTotal += entry.heartRate;
       newDiskHrCount++;
@@ -629,7 +629,7 @@ void MotionController::TruncateDiskLogIfNeeded() {
 
   // Update header with correct totals
   newHeader.count = static_cast<uint32_t>(remainingEntries);
-  newHeader.totalAcceleration = newDiskAccelTotal;
+  newHeader.totalCounts = newDiskCountsTotal;
   newHeader.totalHeartRate = newDiskHrTotal;
   newHeader.heartRateSampleCount = static_cast<uint32_t>(newDiskHrCount);
 
@@ -666,13 +666,13 @@ void MotionController::TruncateDiskLogIfNeeded() {
   diskEntryCount = remainingEntries;
 
   // Recalculate running totals to include in-memory buffer
-  minuteAverageTotal = newDiskAccelTotal;
+  minuteAverageTotal = newDiskCountsTotal;
   minuteHeartRateTotal = newDiskHrTotal;
   minuteHeartRateSampleCount = newDiskHrCount;
   minuteAverageCount = remainingEntries;
 
   for (size_t i = 0; i < inMemoryBufferCount; ++i) {
-    minuteAverageTotal += inMemoryBuffer[i].acceleration;
+    minuteAverageTotal += inMemoryBuffer[i].counts;
     minuteAverageCount++;
     if (inMemoryBuffer[i].heartRate > 0) {
       minuteHeartRateTotal += inMemoryBuffer[i].heartRate;
@@ -704,7 +704,7 @@ void MotionController::LoadMinuteAverageLog() {
   inMemoryBufferCount = 0;
   diskEntryCount = 0;
   minuteAverageCount = 0;
-  minuteAverageTotal = 0;
+  minuteAverageTotal = 0.0;
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
 
@@ -716,7 +716,7 @@ void MotionController::LoadMinuteAverageLog() {
   struct Header {
     uint32_t version;
     uint32_t count;
-    int64_t totalAcceleration;
+    double totalCounts;
     int64_t totalHeartRate;
     uint32_t heartRateSampleCount;
   } header {};
@@ -736,7 +736,7 @@ void MotionController::LoadMinuteAverageLog() {
   // Load cached totals from header
   diskEntryCount = std::min(static_cast<size_t>(header.count), maxDiskLogEntries);
   minuteAverageCount = diskEntryCount;
-  minuteAverageTotal = header.totalAcceleration;
+  minuteAverageTotal = header.totalCounts;
   minuteHeartRateTotal = header.totalHeartRate;
   minuteHeartRateSampleCount = header.heartRateSampleCount;
 
@@ -767,13 +767,13 @@ bool MotionController::ReadStoredEntry(size_t index, MinuteEntryData& entry) {
     struct Header {
       uint32_t version;
       uint32_t count;
-      int64_t totalAcceleration;
+      double totalCounts;
       int64_t totalHeartRate;
       uint32_t heartRateSampleCount;
     };
 
     struct DiskEntry {
-      int32_t acceleration;
+      float counts;
       int16_t heartRate;
       uint32_t timestamp;
     };
@@ -788,7 +788,7 @@ bool MotionController::ReadStoredEntry(size_t index, MinuteEntryData& entry) {
       return false;
     }
 
-    entry.acceleration = diskEntry.acceleration;
+    entry.counts = diskEntry.counts;
     entry.heartRate = diskEntry.heartRate;
     entry.timestamp = diskEntry.timestamp;
     return true;
@@ -800,7 +800,7 @@ bool MotionController::ReadStoredEntry(size_t index, MinuteEntryData& entry) {
     return false;
   }
 
-  entry.acceleration = inMemoryBuffer[bufferIndex].acceleration;
+  entry.counts = inMemoryBuffer[bufferIndex].counts;
   entry.heartRate = inMemoryBuffer[bufferIndex].heartRate;
   entry.timestamp = inMemoryBuffer[bufferIndex].timestamp;
   return true;

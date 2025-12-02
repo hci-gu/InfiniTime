@@ -148,7 +148,7 @@ void HeartRateService::SendEntries(uint16_t connectionHandle, uint32_t startInde
     MotionController::MinuteEntryData entryData {};
     if (motionController.ReadStoredEntry(startIndex + i, entryData)) {
       EntryData entry {
-        .acceleration = entryData.acceleration,
+        .counts = entryData.counts,
         .heartRate = entryData.heartRate,
         .timestamp = entryData.timestamp
       };

@@ -60,7 +60,7 @@ namespace Pinetime {
       };
 
       struct __attribute__((packed)) EntryData {
-        int32_t acceleration;
+        float counts;
         int16_t heartRate;
         uint32_t timestamp;
       };
