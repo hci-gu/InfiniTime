@@ -142,6 +142,10 @@ namespace Pinetime {
 
       void ClearMinuteAverageLog();
 
+      // Public method to flush buffered data to disk storage
+      // Called by SystemTask during periodic wake-ups to ensure data is persisted
+      void FlushToStorage();
+
       // BLE data access methods
       struct MinuteEntryData {
         int32_t acceleration;
@@ -224,8 +228,9 @@ namespace Pinetime {
 
       // Maximum entries stored on disk (24 hours at 1 per minute)
       static constexpr size_t maxDiskLogEntries = 1440;
-      // Small in-memory buffer to batch writes (5 minutes)
-      static constexpr size_t inMemoryBufferSize = 5;
+      // In-memory buffer to batch writes (10 minutes - balances memory usage with data safety)
+      // Timer flushes every 5 minutes, so 10 minutes provides a safety margin
+      static constexpr size_t inMemoryBufferSize = 10;
       static constexpr TickType_t minuteDurationTicks = configTICK_RATE_HZ * 60;
       static constexpr uint32_t minuteAverageLogVersion = 4;
       static constexpr const char minuteAverageDirectory[] = "/.system";

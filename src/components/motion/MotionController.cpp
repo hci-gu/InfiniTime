@@ -815,3 +815,16 @@ void MotionController::FlushAndClearStoredData() {
   // Then clear everything
   ClearMinuteAverageLog();
 }
+
+void MotionController::FlushToStorage() {
+  // This method is called by SystemTask during periodic wake-ups
+  // It temporarily marks storage as accessible to flush the buffer
+  if (inMemoryBufferCount == 0) {
+    return;
+  }
+
+  bool wasAccessible = storageAccessible;
+  storageAccessible = true;
+  FlushBufferToDisk();
+  storageAccessible = wasAccessible;
+}

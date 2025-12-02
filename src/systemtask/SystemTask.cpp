@@ -32,6 +32,11 @@ void MeasureBatteryTimerCallback(TimerHandle_t xTimer) {
   sysTask->PushMessage(Pinetime::System::Messages::MeasureBatteryTimerExpired);
 }
 
+void FlushMotionLogTimerCallback(TimerHandle_t xTimer) {
+  auto* sysTask = static_cast<SystemTask*>(pvTimerGetTimerID(xTimer));
+  sysTask->PushMessage(Pinetime::System::Messages::FlushMotionLog);
+}
+
 SystemTask::SystemTask(Drivers::SpiMaster& spi,
                        Pinetime::Drivers::SpiNorFlash& spiNorFlash,
                        Drivers::TwiMaster& twiMaster,
@@ -182,6 +187,12 @@ void SystemTask::Work() {
 
   measureBatteryTimer = xTimerCreate("measureBattery", batteryMeasurementPeriod, pdTRUE, this, MeasureBatteryTimerCallback);
   xTimerStart(measureBatteryTimer, portMAX_DELAY);
+
+  // Timer to periodically flush motion log buffer to disk (every 5 minutes)
+  // This ensures data is persisted even when the watch is sleeping
+  constexpr TickType_t flushMotionLogPeriod = pdMS_TO_TICKS(5 * 60 * 1000); // 5 minutes
+  flushMotionLogTimer = xTimerCreate("flushMotionLog", flushMotionLogPeriod, pdTRUE, this, FlushMotionLogTimerCallback);
+  xTimerStart(flushMotionLogTimer, portMAX_DELAY);
 
   constexpr TickType_t stateUpdatePeriod = pdMS_TO_TICKS(100);
   // Stores when the state (motion, watchdog, time persistence etc) was last updated
@@ -360,6 +371,26 @@ void SystemTask::Work() {
           break;
         case Messages::MeasureBatteryTimerExpired:
           batteryController.MeasureVoltage();
+          break;
+        case Messages::FlushMotionLog:
+          // Periodically flush motion log buffer to disk, even when sleeping
+          // This ensures data is not lost if the watch sleeps for extended periods
+          if (IsSleeping()) {
+            // SPI bus is only asleep in Sleeping state, not AODSleeping
+            bool needSpiWake = (state == SystemTaskState::Sleeping);
+            if (needSpiWake) {
+              spi.Wakeup();
+            }
+            spiNorFlash.Wakeup();
+            vTaskDelay(pdMS_TO_TICKS(5)); // Give flash time to fully wake from deep power-down
+            motionController.FlushToStorage();
+            spiNorFlash.Sleep();
+            if (needSpiWake) {
+              spi.Sleep();
+            }
+          } else {
+            motionController.FlushToStorage();
+          }
           break;
         case Messages::BatteryPercentageUpdated:
           nimbleController.NotifyBatteryLevel(batteryController.PercentRemaining());

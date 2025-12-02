@@ -133,6 +133,7 @@ namespace Pinetime {
       bool isBleDiscoveryTimerRunning = false;
       uint8_t bleDiscoveryTimer = 0;
       TimerHandle_t measureBatteryTimer;
+      TimerHandle_t flushMotionLogTimer;
       uint8_t wakeLocksHeld = 0;
       SystemTaskState state = SystemTaskState::Running;
 
