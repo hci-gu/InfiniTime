@@ -251,6 +251,8 @@ namespace Pinetime {
       int64_t minuteHeartRateTotal = 0; // Sum of all heart rate values
       size_t minuteHeartRateSampleCount = 0; // Count of non-zero heart rate entries
       TickType_t lastLoggedMinuteTick = 0;
+      uint32_t baseUnixTimestamp = 0;      // Unix timestamp when minute logging started
+      TickType_t baseMinuteTick = 0;       // Tick count when minute logging started
       bool storageAccessible = true;
 
       void LoadMinuteAverageLog();

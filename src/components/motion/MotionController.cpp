@@ -121,6 +121,10 @@ void MotionController::ClearMinuteAverageLog() {
   minuteHeartRateTotal = 0;
   minuteHeartRateSampleCount = 0;
 
+  // Reset timestamp tracking so next entry will re-establish the base
+  baseUnixTimestamp = 0;
+  baseMinuteTick = 0;
+
   // Delete the disk file
   if (fs != nullptr && storageAccessible) {
     fs->FileDelete(minuteAverageFile);
@@ -349,12 +353,24 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
-  // Get current Unix timestamp from DateTimeController
+  // Calculate Unix timestamp based on relative tick offset from base
+  // This prevents duplicate timestamps when multiple entries are stored in quick succession
   uint32_t unixTimestamp = 0;
   if (dateTimeController != nullptr) {
-    auto now = dateTimeController->CurrentDateTime();
-    unixTimestamp = static_cast<uint32_t>(
-      std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+    if (baseUnixTimestamp == 0) {
+      // Initialize base timestamp on first entry
+      auto now = dateTimeController->CurrentDateTime();
+      baseUnixTimestamp = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count());
+      baseMinuteTick = timestamp;
+      unixTimestamp = baseUnixTimestamp;
+    } else {
+      // Calculate timestamp relative to base using tick count
+      // Each minuteDurationTicks corresponds to 60 seconds
+      TickType_t ticksSinceBase = timestamp - baseMinuteTick;
+      uint32_t minutesSinceBase = ticksSinceBase / minuteDurationTicks;
+      unixTimestamp = baseUnixTimestamp + (minutesSinceBase * 60);
+    }
   }
 
   AppendMinuteAverage(accelerationAverage, heartRateAverage, unixTimestamp);

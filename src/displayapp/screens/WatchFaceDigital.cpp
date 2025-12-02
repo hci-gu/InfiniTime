@@ -41,6 +41,11 @@ WatchFaceDigital::WatchFaceDigital(Controllers::DateTime& dateTimeController,
   lv_label_set_text_static(notificationIcon, NotificationIcon::GetIcon(false));
   lv_obj_align(notificationIcon, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 0);
 
+  unsyncedMinutesLabel = lv_label_create(lv_scr_act(), nullptr);
+  lv_obj_set_style_local_text_color(unsyncedMinutesLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
+  lv_label_set_text_static(unsyncedMinutesLabel, "");
+  lv_obj_align(unsyncedMinutesLabel, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 20);
+
   weatherIcon = lv_label_create(lv_scr_act(), nullptr);
   lv_obj_set_style_local_text_color(weatherIcon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
   lv_obj_set_style_local_text_font(weatherIcon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &fontawesome_weathericons);
@@ -170,6 +175,12 @@ void WatchFaceDigital::Refresh() {
     lv_label_set_text_fmt(stepValue, "%lu", stepCount.Get());
     lv_obj_realign(stepValue);
     lv_obj_realign(stepIcon);
+  }
+
+  unsyncedMinutes = motionController.LoggedMinuteCount();
+  if (unsyncedMinutes.IsUpdated()) {
+    lv_label_set_text_fmt(unsyncedMinutesLabel, "%lu", unsyncedMinutes.Get());
+    lv_obj_realign(unsyncedMinutesLabel);
   }
 
   currentWeather = weatherService.Current();
