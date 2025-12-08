@@ -18,12 +18,13 @@ namespace Pinetime {
       constexpr float deadband = 0.068f;
       constexpr float peakThreshold = 2.13f;
       constexpr float adcResolution = 0.0164f;
-      constexpr int integN = 10;
+      // integN adjusted for 10Hz sample rate (original was 10 for 30Hz)
+      // At 10Hz we have 1/3 the samples, so use 1/3 the integration window
+      constexpr int integN = 3;
       constexpr int filtfiltEdge = 27;
-      // Convert binary milli-g to g, then divide by 9.82 to match original algorithm's m/s² to g conversion
-      constexpr float scale = 1.0f / (1024.0f * 9.82f);
-      // Compensation factor for 10Hz vs 30Hz sample rate (3x fewer samples = 3x lower counts)
-      constexpr float sampleRateCompensation = 3.0f;
+      // Convert raw accelerometer values to g units
+      // BMA421 raw format: 1g = 1024 (12-bit, +/- 4g range)
+      constexpr float scale = 1.0f / 1024.0f;
 
       /**
        * Forward IIR filter (8th order)
@@ -284,6 +285,8 @@ namespace Pinetime {
       filterAB(workBuffer + filtfiltEdge, length);
       
       // Downsample by 3, clip, deadband, quantize into downsampleBuffer
+      // Note: Original algorithm designed for 30Hz, downsamples to 10Hz
+      // We're already at 10Hz, but keeping downsample to match expected counts range
       size_t j = 0;
       for (size_t i = 0; i < length; i += 3) {
         float d = workBuffer[filtfiltEdge + i];
@@ -315,9 +318,8 @@ namespace Pinetime {
       float x = ProcessAxis(rawX, length);
       float y = ProcessAxis(rawY, length);
       float z = ProcessAxis(rawZ, length);
-      
-      // Apply sample rate compensation (10Hz vs original 30Hz)
-      return std::sqrt(x * x + y * y + z * z) * sampleRateCompensation;
+
+      return std::sqrt(x * x + y * y + z * z);
     }
   } // namespace Utility
 } // namespace Pinetime
