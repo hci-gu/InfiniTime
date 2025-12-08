@@ -30,56 +30,7 @@ namespace Pinetime {
       /**
        * Forward IIR filter (8th order)
        */
-      void filterAB2Forward(float* data, size_t length) {
-        float z[9];
-        for (int i = 0; i < 9; i++) {
-          z[i] = zi[i] * data[0];
-        }
-
-        float x0[9];
-        for (int i = 0; i < 9 && i < static_cast<int>(length); i++) {
-          x0[i] = data[i];
-        }
-
-        for (int i = 0; i < 9 && i < static_cast<int>(length); i++) {
-          if (i >= 8) z[7] = 0.0753349039750657f * x0[i - 8] - 0.019035473586069288f * data[i - 8] + z[8];
-          if (i >= 7) z[6] = 0.1323148049950936f * data[i - 7] + z[7];
-          if (i >= 6) z[5] = -0.3013396159002628f * x0[i - 6] - 0.8452545660100996f * data[i - 6] + z[6];
-          if (i >= 5) z[4] = 2.7027389238066353f * data[i - 5] + z[5];
-          if (i >= 4) z[3] = 0.4520094238503942f * x0[i - 4] - 5.33187310787808f * data[i - 4] + z[4];
-          if (i >= 3) z[2] = 7.64673626503976f * data[i - 3] + z[3];
-          if (i >= 2) z[1] = -0.3013396159002628f * x0[i - 2] - 7.543176557521139f * data[i - 2] + z[2];
-          if (i >= 1) z[0] = 4.2575497111306f * data[i - 1] + z[1];
-          data[i] = 0.0753349039750657f * data[i] + z[0];
-        }
-
-        float yi8 = data[0], yi7 = data[1], yi6 = data[2], yi5 = data[3];
-        float yi4 = data[4], yi3 = data[5], yi2 = data[6], yi1 = data[7];
-        float xi8 = x0[0], xi7 = x0[1], xi6 = x0[2], xi5 = x0[3];
-        float xi4 = x0[4], xi3 = x0[5], xi2 = x0[6], xi1 = x0[7];
-
-        for (size_t i = 9; i < length; i++) {
-          float za = z[8];
-          za = 0.0753349039750657f * xi8 - 0.019035473586069288f * yi8 + za;
-          za = 0.1323148049950936f * yi7 + za;
-          za = -0.3013396159002628f * xi6 - 0.8452545660100996f * yi6 + za;
-          za = 2.7027389238066353f * yi5 + za;
-          za = 0.4520094238503942f * xi4 - 5.33187310787808f * yi4 + za;
-          za = 7.64673626503976f * yi3 + za;
-          za = -0.3013396159002628f * xi2 - 7.543176557521139f * yi2 + za;
-          za = 4.2575497111306f * yi1 + za;
-
-          yi8 = yi7; yi7 = yi6; yi6 = yi5; yi5 = yi4;
-          yi4 = yi3; yi3 = yi2; yi2 = yi1;
-          yi1 = 0.0753349039750657f * data[i] + za;
-
-          xi8 = xi7; xi7 = xi6; xi6 = xi5; xi5 = xi4;
-          xi4 = xi3; xi3 = xi2; xi2 = xi1;
-          xi1 = data[i];
-
-          data[i] = yi1;
-        }
-      }
+      // filterAB2Forward intentionally omitted (bandpass handled by 20th order stage below)
 
       /**
        * Reverse IIR filter (8th order)
@@ -256,12 +207,6 @@ namespace Pinetime {
         workBuffer[filtfiltEdge + resampledLength + i] =
           2.0f * resampled[resampledLength - 1] - resampled[resampledLength - 2 - i];
       }
-
-      // Apply 8th-order filtfilt (forward + reverse using the same forward routine)
-      filterAB2Forward(workBuffer, resampledLength + 2 * filtfiltEdge);
-      std::reverse(workBuffer, workBuffer + resampledLength + 2 * filtfiltEdge);
-      filterAB2Forward(workBuffer, resampledLength + 2 * filtfiltEdge);
-      std::reverse(workBuffer, workBuffer + resampledLength + 2 * filtfiltEdge);
 
       // Apply 20th order filter in-place on the resampled data
       filterAB(workBuffer + filtfiltEdge, resampledLength);

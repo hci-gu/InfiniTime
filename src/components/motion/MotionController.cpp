@@ -233,6 +233,27 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pineti
   lastLoggedMinuteTick = xTaskGetTickCount();
 }
 
+MotionController::ActivityState MotionController::CurrentActivityState() const {
+  taskENTER_CRITICAL();
+  auto state = currentActivityState;
+  taskEXIT_CRITICAL();
+  return state;
+}
+
+uint32_t MotionController::CurrentActivityStateMinutes() const {
+  taskENTER_CRITICAL();
+  auto minutes = currentStateStreakMinutes;
+  taskEXIT_CRITICAL();
+  return minutes;
+}
+
+std::array<uint32_t, 3> MotionController::DailyActivityMinutes() const {
+  taskENTER_CRITICAL();
+  auto totals = stateDailyMinutes;
+  taskEXIT_CRITICAL();
+  return totals;
+}
+
 void MotionController::OnStorageWake() {
   storageAccessible = true;
   // Flush any pending in-memory entries to disk
@@ -399,6 +420,7 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
 }
 
 void MotionController::UpdateActivityState(float counts) {
+  taskENTER_CRITICAL();
   ActivityState newState = ActivityState::Still;
 
   if (counts < activityStillUpper) {
@@ -414,6 +436,7 @@ void MotionController::UpdateActivityState(float counts) {
     currentStateStreakMinutes = 1;
     stateDailyMinutes[static_cast<size_t>(newState)] = 1;
     activityStateInitialized = true;
+    taskEXIT_CRITICAL();
     return;
   }
 
@@ -425,13 +448,16 @@ void MotionController::UpdateActivityState(float counts) {
   }
 
   stateDailyMinutes[static_cast<size_t>(newState)]++;
+  taskEXIT_CRITICAL();
 }
 
 void MotionController::ResetActivityTracking() {
+  taskENTER_CRITICAL();
   currentActivityState = ActivityState::Still;
   currentStateStreakMinutes = 0;
   std::fill(stateDailyMinutes.begin(), stateDailyMinutes.end(), 0);
   activityStateInitialized = false;
+  taskEXIT_CRITICAL();
 }
 
 void MotionController::AppendMinuteAverage(float counts, int32_t heartRateAverage, uint32_t timestamp) {

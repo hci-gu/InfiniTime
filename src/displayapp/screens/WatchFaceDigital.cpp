@@ -57,9 +57,11 @@ WatchFaceDigital::WatchFaceDigital(Controllers::DateTime& dateTimeController,
   lv_obj_align(notificationIcon, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 0);
 
   activityLabel = lv_label_create(lv_scr_act(), nullptr);
-  lv_obj_set_style_local_text_color(activityLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
-  lv_label_set_text_static(activityLabel, "");
-  lv_obj_align(activityLabel, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 20);
+  if (activityLabel != nullptr) {
+    lv_obj_set_style_local_text_color(activityLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
+    lv_label_set_text_static(activityLabel, "");
+    lv_obj_align(activityLabel, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 20);
+  }
 
   weatherIcon = lv_label_create(lv_scr_act(), nullptr);
   lv_obj_set_style_local_text_color(weatherIcon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
@@ -192,17 +194,19 @@ void WatchFaceDigital::Refresh() {
     lv_obj_realign(stepIcon);
   }
 
-  activityState = motionController.CurrentActivityState();
-  activityStateMinutes = motionController.CurrentActivityStateMinutes();
-  if (activityState.IsUpdated() || activityStateMinutes.IsUpdated()) {
-    auto minutes = activityStateMinutes.Get();
-    if (minutes == 0) {
-      lv_label_set_text_static(activityLabel, "");
-    } else {
-      const char* label = ToShortLabel(activityState.Get());
-      lv_label_set_text_fmt(activityLabel, "%s - %lu", label, static_cast<unsigned long>(minutes));
+  if (activityLabel != nullptr) {
+    activityState = motionController.CurrentActivityState();
+    activityStateMinutes = motionController.CurrentActivityStateMinutes();
+    if (activityState.IsUpdated() || activityStateMinutes.IsUpdated()) {
+      auto minutes = activityStateMinutes.Get();
+      if (minutes == 0) {
+        lv_label_set_text_static(activityLabel, "");
+      } else {
+        const char* label = ToShortLabel(activityState.Get());
+        lv_label_set_text_fmt(activityLabel, "%s - %lu", label, static_cast<unsigned long>(minutes));
+      }
+      lv_obj_realign(activityLabel);
     }
-    lv_obj_realign(activityLabel);
   }
 
   currentWeather = weatherService.Current();

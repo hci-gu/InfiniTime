@@ -162,17 +162,9 @@ namespace Pinetime {
       bool ReadStoredEntry(size_t index, MinuteEntryData& entry);
       void FlushAndClearStoredData();
 
-      ActivityState CurrentActivityState() const {
-        return currentActivityState;
-      }
-
-      uint32_t CurrentActivityStateMinutes() const {
-        return currentStateStreakMinutes;
-      }
-
-      std::array<uint32_t, 3> DailyActivityMinutes() const {
-        return stateDailyMinutes;
-      }
+      ActivityState CurrentActivityState() const;
+      uint32_t CurrentActivityStateMinutes() const;
+      std::array<uint32_t, 3> DailyActivityMinutes() const;
 
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
