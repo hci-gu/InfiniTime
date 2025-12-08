@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <FreeRTOS.h>
 
 namespace Pinetime {
   namespace Utility {
@@ -18,13 +19,13 @@ namespace Pinetime {
       constexpr float deadband = 0.068f;
       constexpr float peakThreshold = 2.13f;
       constexpr float adcResolution = 0.0164f;
-      // integN adjusted for 10Hz sample rate (original was 10 for 30Hz)
-      // At 10Hz we have 1/3 the samples, so use 1/3 the integration window
-      constexpr int integN = 3;
+      // Integration window for 10 samples (1s at 10Hz after downsampling)
+      constexpr int integN = 10;
       constexpr int filtfiltEdge = 27;
-      // Convert raw accelerometer values to g units
-      // BMA421 raw format: 1g = 1024 (12-bit, +/- 4g range)
+      // Convert raw accelerometer values to g units (BMA421: 1g = 1024)
       constexpr float scale = 1.0f / 1024.0f;
+      // Gain applied to the Brond 20th order filter output (matches reference)
+      constexpr float brondGain = 0.965f;
 
       /**
        * Forward IIR filter (8th order)
@@ -83,58 +84,7 @@ namespace Pinetime {
       /**
        * Reverse IIR filter (8th order)
        */
-      void filterAB2Reverse(float* data, size_t length) {
-        float z[9];
-        for (int i = 0; i < 9; i++) {
-          z[i] = zi[i] * data[length - 1];
-        }
-
-        float x0[9];
-        for (int i = 0; i < 9; i++) {
-          x0[i] = data[length - 9 + i];
-        }
-
-        for (int i = 0; i < 9; i++) {
-          int idx = static_cast<int>(length) - 1 - i;
-          if (i >= 8) z[7] = 0.0753349039750657f * x0[8 - i + 8] - 0.019035473586069288f * data[idx + 8] + z[8];
-          if (i >= 7) z[6] = 0.1323148049950936f * data[idx + 7] + z[7];
-          if (i >= 6) z[5] = -0.3013396159002628f * x0[8 - i + 6] - 0.8452545660100996f * data[idx + 6] + z[6];
-          if (i >= 5) z[4] = 2.7027389238066353f * data[idx + 5] + z[5];
-          if (i >= 4) z[3] = 0.4520094238503942f * x0[8 - i + 4] - 5.33187310787808f * data[idx + 4] + z[4];
-          if (i >= 3) z[2] = 7.64673626503976f * data[idx + 3] + z[3];
-          if (i >= 2) z[1] = -0.3013396159002628f * x0[8 - i + 2] - 7.543176557521139f * data[idx + 2] + z[2];
-          if (i >= 1) z[0] = 4.2575497111306f * data[idx + 1] + z[1];
-          data[idx] = 0.0753349039750657f * x0[8 - i] + z[0];
-        }
-
-        float yi8 = data[length - 1], yi7 = data[length - 2], yi6 = data[length - 3], yi5 = data[length - 4];
-        float yi4 = data[length - 5], yi3 = data[length - 6], yi2 = data[length - 7], yi1 = data[length - 8];
-        float xi8 = x0[8], xi7 = x0[7], xi6 = x0[6], xi5 = x0[5];
-        float xi4 = x0[4], xi3 = x0[3], xi2 = x0[2], xi1 = x0[1];
-
-        for (size_t i = 9; i < length; i++) {
-          size_t idx = length - 1 - i;
-          float za = z[8];
-          za = 0.0753349039750657f * xi8 - 0.019035473586069288f * yi8 + za;
-          za = 0.1323148049950936f * yi7 + za;
-          za = -0.3013396159002628f * xi6 - 0.8452545660100996f * yi6 + za;
-          za = 2.7027389238066353f * yi5 + za;
-          za = 0.4520094238503942f * xi4 - 5.33187310787808f * yi4 + za;
-          za = 7.64673626503976f * yi3 + za;
-          za = -0.3013396159002628f * xi2 - 7.543176557521139f * yi2 + za;
-          za = 4.2575497111306f * yi1 + za;
-
-          yi8 = yi7; yi7 = yi6; yi6 = yi5; yi5 = yi4;
-          yi4 = yi3; yi3 = yi2; yi2 = yi1;
-          yi1 = 0.0753349039750657f * data[idx] + za;
-
-          xi8 = xi7; xi7 = xi6; xi6 = xi5; xi5 = xi4;
-          xi4 = xi3; xi3 = xi2; xi2 = xi1;
-          xi1 = data[idx];
-
-          data[idx] = yi1;
-        }
-      }
+      // filterAB2Reverse removed (unused)
 
       /**
        * Forward IIR filter (20th order)
@@ -244,51 +194,96 @@ namespace Pinetime {
       }
     } // anonymous namespace
 
-    // Static buffer definitions
-    float CountsCalculator::workBuffer[CountsCalculator::extendedLength];
-    float CountsCalculator::downsampleBuffer[CountsCalculator::downsampledLength];
+    // Static buffer pointers (lazy allocated)
+    float* CountsCalculator::workBuffer = nullptr;
+    float* CountsCalculator::downsampleBuffer = nullptr;
 
-    float CountsCalculator::ProcessAxis(const int16_t* rawData, size_t length) {
-      // Convert int16_t to float (g units) in workBuffer
-      // workBuffer has extendedLength which is > maxInputLength, so this is safe
-      for (size_t i = 0; i < length; i++) {
-        workBuffer[i] = static_cast<float>(rawData[i]) * scale;
+    bool CountsCalculator::AllocBuffers() {
+      if (workBuffer == nullptr) {
+        workBuffer = static_cast<float*>(pvPortMalloc(sizeof(float) * extendedLength));
       }
-      
-      // Apply filtfilt - we need to extend the signal for edge handling
-      // Use a temporary approach: extend into workBuffer from the converted data
-      size_t extLen = length + 2 * filtfiltEdge;
-      
-      // Create extended signal in-place by shifting and adding edges
-      // First, shift the data to make room for the leading edge extension
-      for (size_t i = length; i > 0; i--) {
-        workBuffer[filtfiltEdge + i - 1] = workBuffer[i - 1];
+      if (downsampleBuffer == nullptr) {
+        downsampleBuffer = static_cast<float*>(pvPortMalloc(sizeof(float) * downsampledLength));
       }
-      
-      // Add leading edge extension (odd reflection)
+      return workBuffer != nullptr && downsampleBuffer != nullptr;
+    }
+
+    void CountsCalculator::FreeBuffers() {
+      if (workBuffer != nullptr) {
+        vPortFree(workBuffer);
+        workBuffer = nullptr;
+      }
+      if (downsampleBuffer != nullptr) {
+        vPortFree(downsampleBuffer);
+        downsampleBuffer = nullptr;
+      }
+    }
+
+    float CountsCalculator::ProcessAxis(const float* scaledData, size_t length) {
+      if (length < 2) {
+        return 0.0f;
+      }
+
+      // Step 1: Up-sample 10Hz raw data to 30Hz using linear interpolation
+      const size_t resampledLength = length * resampleFactor;
+      if (resampledLength <= filtfiltEdge || workBuffer == nullptr) {
+        return 0.0f;
+      }
+      float* resampled = workBuffer + filtfiltEdge; // leave space for leading extension
+
+      size_t outIdx = 0;
+      for (size_t i = 0; i + 1 < length; i++) {
+        float v0 = scaledData[i];
+        float v1 = scaledData[i + 1];
+        float step = (v1 - v0) * (1.0f / static_cast<float>(resampleFactor));
+
+        resampled[outIdx++] = v0;
+        resampled[outIdx++] = v0 + step;
+        resampled[outIdx++] = v0 + 2.0f * step;
+      }
+
+      // Pad tail with the last sample to reach the expected length
+      float lastValue = scaledData[length - 1];
+      while (outIdx < resampledLength) {
+        resampled[outIdx++] = lastValue;
+      }
+
+      // Step 2: Create edge extensions (odd reflection) around resampled data
       for (int i = 0; i < filtfiltEdge; i++) {
-        workBuffer[i] = 2.0f * workBuffer[filtfiltEdge] - workBuffer[2 * filtfiltEdge - 1 - i];
+        workBuffer[i] = 2.0f * resampled[0] - resampled[filtfiltEdge - 1 - i];
       }
-      
-      // Add trailing edge extension (odd reflection)
       for (int i = 0; i < filtfiltEdge; i++) {
-        workBuffer[filtfiltEdge + length + i] = 2.0f * workBuffer[filtfiltEdge + length - 1] - 
-                                                 workBuffer[filtfiltEdge + length - 2 - i];
+        workBuffer[filtfiltEdge + resampledLength + i] =
+          2.0f * resampled[resampledLength - 1] - resampled[resampledLength - 2 - i];
+      }
+
+      // Apply 8th-order filtfilt (forward + reverse using the same forward routine)
+      filterAB2Forward(workBuffer, resampledLength + 2 * filtfiltEdge);
+      std::reverse(workBuffer, workBuffer + resampledLength + 2 * filtfiltEdge);
+      filterAB2Forward(workBuffer, resampledLength + 2 * filtfiltEdge);
+      std::reverse(workBuffer, workBuffer + resampledLength + 2 * filtfiltEdge);
+
+      // Apply 20th order filter in-place on the resampled data
+      filterAB(workBuffer + filtfiltEdge, resampledLength);
+
+      // Apply gain to match reference implementation
+      for (size_t i = 0; i < resampledLength; i++) {
+        workBuffer[filtfiltEdge + i] *= brondGain;
+      }
+
+      // Remove any residual DC/gravity bias to avoid inflating counts
+      float mean = 0.0f;
+      for (size_t i = 0; i < resampledLength; i++) {
+        mean += workBuffer[filtfiltEdge + i];
+      }
+      mean /= static_cast<float>(resampledLength);
+      for (size_t i = 0; i < resampledLength; i++) {
+        workBuffer[filtfiltEdge + i] -= mean;
       }
       
-      // Apply forward and reverse 8th order filter
-      filterAB2Forward(workBuffer, extLen);
-      filterAB2Reverse(workBuffer, extLen);
-      
-      // The result is in workBuffer[filtfiltEdge ... filtfiltEdge+length-1]
-      // Apply 20th order filter in-place on this region
-      filterAB(workBuffer + filtfiltEdge, length);
-      
-      // Downsample by 3, clip, deadband, quantize into downsampleBuffer
-      // Note: Original algorithm designed for 30Hz, downsamples to 10Hz
-      // We're already at 10Hz, but keeping downsample to match expected counts range
+      // Downsample by 3 back to 10Hz, clip, deadband, quantize into downsampleBuffer
       size_t j = 0;
-      for (size_t i = 0; i < length; i += 3) {
+      for (size_t i = 0; i < resampledLength; i += resampleFactor) {
         float d = workBuffer[filtfiltEdge + i];
         
         // Clip to peak threshold
@@ -313,13 +308,51 @@ namespace Pinetime {
       if (length == 0 || length > maxInputLength) {
         return 0.0f;
       }
-      
-      // Process each axis sequentially, reusing workBuffer for each
-      float x = ProcessAxis(rawX, length);
-      float y = ProcessAxis(rawY, length);
-      float z = ProcessAxis(rawZ, length);
+      if (!AllocBuffers()) {
+        return 0.0f;
+      }
 
-      return std::sqrt(x * x + y * y + z * z);
+      // Map raw milli-g values to g (1g = 1024) before processing
+      // Reuse downsampleBuffer for the temporary mapped data to avoid extra RAM.
+      // Remove DC (gravity) per-axis before filtering to avoid clipping.
+      float mean = 0.0f;
+
+      mean = 0.0f;
+      for (size_t i = 0; i < length; i++) {
+        downsampleBuffer[i] = static_cast<float>(rawX[i]) * scale;
+        mean += downsampleBuffer[i];
+      }
+      mean /= static_cast<float>(length);
+      for (size_t i = 0; i < length; i++) {
+        downsampleBuffer[i] -= mean;
+      }
+      float x = ProcessAxis(downsampleBuffer, length);
+
+      mean = 0.0f;
+      for (size_t i = 0; i < length; i++) {
+        downsampleBuffer[i] = static_cast<float>(rawY[i]) * scale;
+        mean += downsampleBuffer[i];
+      }
+      mean /= static_cast<float>(length);
+      for (size_t i = 0; i < length; i++) {
+        downsampleBuffer[i] -= mean;
+      }
+      float y = ProcessAxis(downsampleBuffer, length);
+
+      mean = 0.0f;
+      for (size_t i = 0; i < length; i++) {
+        downsampleBuffer[i] = static_cast<float>(rawZ[i]) * scale;
+        mean += downsampleBuffer[i];
+      }
+      mean /= static_cast<float>(length);
+      for (size_t i = 0; i < length; i++) {
+        downsampleBuffer[i] -= mean;
+      }
+      float z = ProcessAxis(downsampleBuffer, length);
+
+      float result = std::sqrt(x * x + y * y + z * z);
+      FreeBuffers();
+      return result;
     }
   } // namespace Utility
 } // namespace Pinetime
