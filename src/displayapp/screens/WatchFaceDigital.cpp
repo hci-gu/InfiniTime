@@ -16,6 +16,21 @@
 
 using namespace Pinetime::Applications::Screens;
 
+namespace {
+  const char* ToShortLabel(Pinetime::Controllers::MotionController::ActivityState state) {
+    using ActivityState = Pinetime::Controllers::MotionController::ActivityState;
+    switch (state) {
+      case ActivityState::Still:
+        return "Still";
+      case ActivityState::Moving:
+        return "Move";
+      case ActivityState::Active:
+        return "Active";
+    }
+    return "";
+  }
+}
+
 WatchFaceDigital::WatchFaceDigital(Controllers::DateTime& dateTimeController,
                                    const Controllers::Battery& batteryController,
                                    const Controllers::Ble& bleController,
@@ -41,10 +56,10 @@ WatchFaceDigital::WatchFaceDigital(Controllers::DateTime& dateTimeController,
   lv_label_set_text_static(notificationIcon, NotificationIcon::GetIcon(false));
   lv_obj_align(notificationIcon, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 0);
 
-  unsyncedMinutesLabel = lv_label_create(lv_scr_act(), nullptr);
-  lv_obj_set_style_local_text_color(unsyncedMinutesLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
-  lv_label_set_text_static(unsyncedMinutesLabel, "");
-  lv_obj_align(unsyncedMinutesLabel, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 20);
+  activityLabel = lv_label_create(lv_scr_act(), nullptr);
+  lv_obj_set_style_local_text_color(activityLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
+  lv_label_set_text_static(activityLabel, "");
+  lv_obj_align(activityLabel, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 20);
 
   weatherIcon = lv_label_create(lv_scr_act(), nullptr);
   lv_obj_set_style_local_text_color(weatherIcon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
@@ -177,10 +192,17 @@ void WatchFaceDigital::Refresh() {
     lv_obj_realign(stepIcon);
   }
 
-  unsyncedMinutes = motionController.LoggedMinuteCount();
-  if (unsyncedMinutes.IsUpdated()) {
-    lv_label_set_text_fmt(unsyncedMinutesLabel, "%lu", unsyncedMinutes.Get());
-    lv_obj_realign(unsyncedMinutesLabel);
+  activityState = motionController.CurrentActivityState();
+  activityStateMinutes = motionController.CurrentActivityStateMinutes();
+  if (activityState.IsUpdated() || activityStateMinutes.IsUpdated()) {
+    auto minutes = activityStateMinutes.Get();
+    if (minutes == 0) {
+      lv_label_set_text_static(activityLabel, "");
+    } else {
+      const char* label = ToShortLabel(activityState.Get());
+      lv_label_set_text_fmt(activityLabel, "%s - %lu", label, static_cast<unsigned long>(minutes));
+    }
+    lv_obj_realign(activityLabel);
   }
 
   currentWeather = weatherService.Current();

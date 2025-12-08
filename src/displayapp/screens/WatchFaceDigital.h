@@ -6,6 +6,7 @@
 #include <memory>
 #include "displayapp/screens/Screen.h"
 #include "components/datetime/DateTimeController.h"
+#include "components/motion/MotionController.h"
 #include "components/ble/SimpleWeatherService.h"
 #include "components/ble/BleController.h"
 #include "displayapp/widgets/StatusIcons.h"
@@ -50,7 +51,8 @@ namespace Pinetime {
         Utility::DirtyValue<uint8_t> heartbeat {};
         Utility::DirtyValue<bool> heartbeatRunning {};
         Utility::DirtyValue<bool> notificationState {};
-        Utility::DirtyValue<uint32_t> unsyncedMinutes {};
+        Utility::DirtyValue<Controllers::MotionController::ActivityState> activityState {};
+        Utility::DirtyValue<uint32_t> activityStateMinutes {};
         Utility::DirtyValue<std::optional<Pinetime::Controllers::SimpleWeatherService::CurrentWeather>> currentWeather {};
 
         Utility::DirtyValue<std::chrono::time_point<std::chrono::system_clock, std::chrono::days>> currentDate;
@@ -63,7 +65,7 @@ namespace Pinetime {
         lv_obj_t* stepIcon;
         lv_obj_t* stepValue;
         lv_obj_t* notificationIcon;
-        lv_obj_t* unsyncedMinutesLabel;
+        lv_obj_t* activityLabel;
         lv_obj_t* weatherIcon;
         lv_obj_t* temperature;
 

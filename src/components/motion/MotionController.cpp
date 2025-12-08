@@ -58,6 +58,7 @@ namespace {
 void MotionController::AdvanceDay() {
   --nbSteps; // Higher index = further in the past
   SetSteps(Days::Today, 0);
+  ResetActivityTracking();
   if (service != nullptr) {
     service->OnNewStepCountValue(NbSteps(Days::Today));
   }
@@ -136,6 +137,7 @@ void MotionController::ClearMinuteAverageLog() {
   // Reset timestamp tracking so next entry will re-establish the base
   baseUnixTimestamp = 0;
   baseMinuteTick = 0;
+  ResetActivityTracking();
 
   // Delete the disk file
   if (fs != nullptr && storageAccessible) {
@@ -226,6 +228,7 @@ void MotionController::Init(Pinetime::Drivers::Bma421::DeviceTypes types, Pineti
   fs = &fsController;
   dateTimeController = &dateTime;
   storageAccessible = true;
+  ResetActivityTracking();
   LoadMinuteAverageLog();
   lastLoggedMinuteTick = xTaskGetTickCount();
 }
@@ -369,6 +372,8 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
     return;
   }
 
+  UpdateActivityState(counts);
+
   // Calculate Unix timestamp based on relative tick offset from base
   // This prevents duplicate timestamps when multiple entries are stored in quick succession
   uint32_t unixTimestamp = 0;
@@ -391,6 +396,42 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
 
   AppendMinuteAverage(counts, heartRateAverage, unixTimestamp);
   lastLoggedMinuteTick = timestamp;
+}
+
+void MotionController::UpdateActivityState(float counts) {
+  ActivityState newState = ActivityState::Still;
+
+  if (counts < activityStillUpper) {
+    newState = ActivityState::Still;
+  } else if (counts < activityMovingUpper) {
+    newState = ActivityState::Moving;
+  } else {
+    newState = ActivityState::Active;
+  }
+
+  if (!activityStateInitialized) {
+    currentActivityState = newState;
+    currentStateStreakMinutes = 1;
+    stateDailyMinutes[static_cast<size_t>(newState)] = 1;
+    activityStateInitialized = true;
+    return;
+  }
+
+  if (newState == currentActivityState) {
+    currentStateStreakMinutes++;
+  } else {
+    currentActivityState = newState;
+    currentStateStreakMinutes = 1;
+  }
+
+  stateDailyMinutes[static_cast<size_t>(newState)]++;
+}
+
+void MotionController::ResetActivityTracking() {
+  currentActivityState = ActivityState::Still;
+  currentStateStreakMinutes = 0;
+  std::fill(stateDailyMinutes.begin(), stateDailyMinutes.end(), 0);
+  activityStateInitialized = false;
 }
 
 void MotionController::AppendMinuteAverage(float counts, int32_t heartRateAverage, uint32_t timestamp) {

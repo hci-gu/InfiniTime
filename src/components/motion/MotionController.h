@@ -69,6 +69,12 @@ namespace Pinetime {
         BMA425,
       };
 
+      enum class ActivityState : uint8_t {
+        Still = 0,
+        Moving,
+        Active,
+      };
+
       enum class Days : uint8_t {
         Today = 0,
         Yesterday,
@@ -156,6 +162,18 @@ namespace Pinetime {
       bool ReadStoredEntry(size_t index, MinuteEntryData& entry);
       void FlushAndClearStoredData();
 
+      ActivityState CurrentActivityState() const {
+        return currentActivityState;
+      }
+
+      uint32_t CurrentActivityStateMinutes() const {
+        return currentStateStreakMinutes;
+      }
+
+      std::array<uint32_t, 3> DailyActivityMinutes() const {
+        return stateDailyMinutes;
+      }
+
     private:
       Utility::CircularBuffer<uint32_t, stepHistorySize> nbSteps = {0};
       uint32_t currentTripSteps = 0;
@@ -230,6 +248,8 @@ namespace Pinetime {
       static constexpr uint32_t minuteAverageLogVersion = 7;  // v7: Counts algorithm/rate update, clear old data
       static constexpr const char minuteAverageDirectory[] = "/.system";
       static constexpr const char minuteAverageFile[] = "/.system/accel_avg.dat";
+      static constexpr float activityStillUpper = 2700.0f;
+      static constexpr float activityMovingUpper = 9515.0f;
 
       struct MinuteEntry {
         float counts = 0.0f;
@@ -255,6 +275,12 @@ namespace Pinetime {
       TickType_t baseMinuteTick = 0;       // Tick count when minute logging started
       bool storageAccessible = true;
 
+      // Activity state tracking (per-day, not persisted)
+      ActivityState currentActivityState = ActivityState::Still;
+      uint32_t currentStateStreakMinutes = 0;
+      std::array<uint32_t, 3> stateDailyMinutes = {0, 0, 0};
+      bool activityStateInitialized = false;
+
       void LoadMinuteAverageLog();
       void FlushBufferToDisk();
       void EnsureLogDirectory();
@@ -263,6 +289,8 @@ namespace Pinetime {
       float CalculateCountsFromRawSamples();
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
       void TruncateDiskLogIfNeeded();
+      void UpdateActivityState(float counts);
+      void ResetActivityTracking();
     };
   }
 }
