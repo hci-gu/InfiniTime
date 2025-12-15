@@ -14,6 +14,9 @@
 #include "components/ble/SimpleWeatherService.h"
 #include "components/settings/Settings.h"
 
+#include "displayapp/icons/movement/moving.c"
+#include "displayapp/icons/movement/still.c"
+
 using namespace Pinetime::Applications::Screens;
 
 namespace {
@@ -56,11 +59,25 @@ WatchFaceDigital::WatchFaceDigital(Controllers::DateTime& dateTimeController,
   lv_label_set_text_static(notificationIcon, NotificationIcon::GetIcon(false));
   lv_obj_align(notificationIcon, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 0);
 
+  activityIcon = lv_img_create(lv_scr_act(), nullptr);
+  if (activityIcon != nullptr) {
+    lv_img_set_src(activityIcon, &movement_still);
+    lv_obj_set_style_local_image_recolor(activityIcon, LV_IMG_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x00FFE7));
+    lv_obj_set_style_local_image_recolor_opa(activityIcon, LV_IMG_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_COVER);
+    lv_obj_set_hidden(activityIcon, true);
+  }
+
   activityLabel = lv_label_create(lv_scr_act(), nullptr);
   if (activityLabel != nullptr) {
-    lv_obj_set_style_local_text_color(activityLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x999999));
+    lv_obj_set_style_local_text_color(activityLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x00FFE7));
     lv_label_set_text_static(activityLabel, "");
-    lv_obj_align(activityLabel, nullptr, LV_ALIGN_IN_TOP_LEFT, 0, 20);
+    lv_obj_align(activityLabel, lv_scr_act(), LV_ALIGN_IN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_hidden(activityLabel, true);
+  }
+  if (activityIcon != nullptr && activityLabel != nullptr) {
+    lv_obj_align(activityIcon, activityLabel, LV_ALIGN_OUT_LEFT_MID, -5, 0);
+  } else if (activityIcon != nullptr) {
+    lv_obj_align(activityIcon, lv_scr_act(), LV_ALIGN_IN_BOTTOM_RIGHT, 0, 0);
   }
 
   weatherIcon = lv_label_create(lv_scr_act(), nullptr);
@@ -97,16 +114,6 @@ WatchFaceDigital::WatchFaceDigital(Controllers::DateTime& dateTimeController,
   lv_obj_set_style_local_text_color(heartbeatValue, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0xCE1B1B));
   lv_label_set_text_static(heartbeatValue, "");
   lv_obj_align(heartbeatValue, heartbeatIcon, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
-
-  stepValue = lv_label_create(lv_scr_act(), nullptr);
-  lv_obj_set_style_local_text_color(stepValue, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x00FFE7));
-  lv_label_set_text_static(stepValue, "0");
-  lv_obj_align(stepValue, lv_scr_act(), LV_ALIGN_IN_BOTTOM_RIGHT, 0, 0);
-
-  stepIcon = lv_label_create(lv_scr_act(), nullptr);
-  lv_obj_set_style_local_text_color(stepIcon, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, lv_color_hex(0x00FFE7));
-  lv_label_set_text_static(stepIcon, Symbols::shoe);
-  lv_obj_align(stepIcon, stepValue, LV_ALIGN_OUT_LEFT_MID, -5, 0);
 
   taskRefresh = lv_task_create(RefreshTaskCallback, LV_DISP_DEF_REFR_PERIOD, LV_TASK_PRIO_MID, this);
   Refresh();
@@ -187,13 +194,6 @@ void WatchFaceDigital::Refresh() {
     lv_obj_realign(heartbeatValue);
   }
 
-  stepCount = motionController.NbSteps();
-  if (stepCount.IsUpdated()) {
-    lv_label_set_text_fmt(stepValue, "%lu", stepCount.Get());
-    lv_obj_realign(stepValue);
-    lv_obj_realign(stepIcon);
-  }
-
   if (activityLabel != nullptr) {
     activityState = motionController.CurrentActivityState();
     activityStateMinutes = motionController.CurrentActivityStateMinutes();
@@ -201,9 +201,30 @@ void WatchFaceDigital::Refresh() {
       auto minutes = activityStateMinutes.Get();
       if (minutes == 0) {
         lv_label_set_text_static(activityLabel, "");
+        lv_obj_set_hidden(activityLabel, true);
+        if (activityIcon != nullptr) {
+          lv_obj_set_hidden(activityIcon, true);
+        }
       } else {
-        const char* label = ToShortLabel(activityState.Get());
-        lv_label_set_text_fmt(activityLabel, "%s - %lu", label, static_cast<unsigned long>(minutes));
+        if (activityIcon != nullptr) {
+          using ActivityState = Pinetime::Controllers::MotionController::ActivityState;
+          const lv_img_dsc_t* icon = &movement_moving;
+          if (activityState.Get() == ActivityState::Still) {
+            icon = &movement_still;
+          }
+
+          lv_img_set_src(activityIcon, icon);
+          lv_label_set_text_fmt(activityLabel, "%lu", static_cast<unsigned long>(minutes));
+          lv_obj_set_hidden(activityIcon, false);
+        } else {
+          const char* label = ToShortLabel(activityState.Get());
+          lv_label_set_text_fmt(activityLabel, "%s - %lu", label, static_cast<unsigned long>(minutes));
+        }
+
+        lv_obj_set_hidden(activityLabel, false);
+      }
+      if (activityIcon != nullptr) {
+        lv_obj_realign(activityIcon);
       }
       lv_obj_realign(activityLabel);
     }
