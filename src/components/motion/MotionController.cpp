@@ -137,7 +137,6 @@ void MotionController::ClearMinuteAverageLog() {
   // Reset timestamp tracking so next entry will re-establish the base
   baseUnixTimestamp = 0;
   baseMinuteTick = 0;
-  ResetActivityTracking();
 
   // Delete the disk file
   if (fs != nullptr && storageAccessible) {

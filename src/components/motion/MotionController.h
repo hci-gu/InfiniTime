@@ -147,6 +147,7 @@ namespace Pinetime {
       }
 
       void ClearMinuteAverageLog();
+      void ResetActivityTracking();
 
       // Public method to flush buffered data to disk storage
       // Called by SystemTask during periodic wake-ups to ensure data is persisted
@@ -282,7 +283,6 @@ namespace Pinetime {
       int32_t AverageHeartRateLastMinuteInternal(TickType_t currentTimestamp);
       void TruncateDiskLogIfNeeded();
       void UpdateActivityState(float counts);
-      void ResetActivityTracking();
     };
   }
 }
