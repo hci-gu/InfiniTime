@@ -223,10 +223,10 @@ void WatchFaceDigital::Refresh() {
 
         lv_obj_set_hidden(activityLabel, false);
       }
+      lv_obj_realign(activityLabel);
       if (activityIcon != nullptr) {
         lv_obj_realign(activityIcon);
       }
-      lv_obj_realign(activityLabel);
     }
   }
 

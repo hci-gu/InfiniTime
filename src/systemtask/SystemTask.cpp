@@ -17,7 +17,9 @@
 #include "main.h"
 #include "BootErrors.h"
 
+#include <algorithm>
 #include <memory>
+#include <cstring>
 
 using namespace Pinetime::System;
 
@@ -488,6 +490,7 @@ void SystemTask::UpdateMotion() {
   auto motionValues = motionSensor.Process();
 
   motionController.Update(motionValues.x, motionValues.y, motionValues.z, motionValues.steps);
+  MaybeSendTimeToMoveReminder();
 
   if (settingsController.GetNotificationStatus() != Controllers::Settings::Notification::Sleep) {
     if ((settingsController.isWakeUpModeOn(Pinetime::Controllers::Settings::WakeUpMode::RaiseWrist) &&
@@ -501,6 +504,63 @@ void SystemTask::UpdateMotion() {
       motionController.ShouldLowerSleep()) {
     GoToSleep();
   }
+}
+
+void SystemTask::MaybeSendTimeToMoveReminder() {
+  using ActivityState = Pinetime::Controllers::MotionController::ActivityState;
+
+  const auto activityState = motionController.CurrentActivityState();
+  if (activityState != ActivityState::Still) {
+    timeToMoveReminderSentForCurrentStillStreak = false;
+    return;
+  }
+
+  const auto stillMinutes = motionController.CurrentActivityStateMinutes();
+  if (stillMinutes <= timeToMoveStillMinutesThreshold) {
+    return;
+  }
+
+  if (timeToMoveReminderSentForCurrentStillStreak) {
+    return;
+  }
+
+  if (settingsController.GetNotificationStatus() != Controllers::Settings::Notification::On) {
+    return;
+  }
+
+  Pinetime::Controllers::NotificationManager::Notification notif;
+  notif.category = Pinetime::Controllers::NotificationManager::Categories::SimpleAlert;
+
+  constexpr const char* title = "Move";
+  constexpr const char* message = "Time to move";
+  constexpr size_t maxMessageSize = Pinetime::Controllers::NotificationManager::MaximumMessageSize();
+
+  const size_t titleLen = std::strlen(title);
+  const size_t messageLen = std::strlen(message);
+  const size_t totalSize = titleLen + 1 + messageLen + 1;
+
+  if (totalSize <= maxMessageSize) {
+    std::memcpy(notif.message.data(), title, titleLen);
+    notif.message[titleLen] = '\0';
+    std::memcpy(notif.message.data() + titleLen + 1, message, messageLen);
+    notif.message[titleLen + 1 + messageLen] = '\0';
+    notif.size = static_cast<uint8_t>(totalSize);
+  } else {
+    // Fallback to a single string if the dual-field format doesn't fit.
+    const size_t bytesToCopy = std::min(messageLen, maxMessageSize - 1);
+    std::memcpy(notif.message.data(), message, bytesToCopy);
+    notif.message[bytesToCopy] = '\0';
+    notif.size = static_cast<uint8_t>(bytesToCopy + 1);
+  }
+
+  notificationManager.Push(std::move(notif));
+
+  if (IsSleeping()) {
+    GoToRunning();
+  }
+  displayApp.PushMessage(Pinetime::Applications::Display::Messages::NewNotification);
+
+  timeToMoveReminderSentForCurrentStillStreak = true;
 }
 
 void SystemTask::HandleButtonAction(Controllers::ButtonActions action) {
