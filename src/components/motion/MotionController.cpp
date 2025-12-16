@@ -420,33 +420,56 @@ void MotionController::MaybeStoreMinuteAverage(TickType_t timestamp) {
 
 void MotionController::UpdateActivityState(float counts) {
   taskENTER_CRITICAL();
-  ActivityState newState = ActivityState::Still;
+  ActivityState rawState = ActivityState::Still;
 
   if (counts < activityStillUpper) {
-    newState = ActivityState::Still;
+    rawState = ActivityState::Still;
   } else if (counts < activityMovingUpper) {
-    newState = ActivityState::Moving;
+    rawState = ActivityState::Moving;
   } else {
-    newState = ActivityState::Active;
+    rawState = ActivityState::Active;
   }
 
   if (!activityStateInitialized) {
-    currentActivityState = newState;
+    currentActivityState = (rawState == ActivityState::Still) ? ActivityState::Still : ActivityState::Moving;
     currentStateStreakMinutes = 1;
-    stateDailyMinutes[static_cast<size_t>(newState)] = 1;
+    stateDailyMinutes[static_cast<size_t>(rawState)] = 1;
     activityStateInitialized = true;
+    pendingActivityState = currentActivityState;
+    pendingStateStreakMinutes = 0;
     taskEXIT_CRITICAL();
     return;
   }
 
-  if (newState == currentActivityState) {
+  stateDailyMinutes[static_cast<size_t>(rawState)]++;
+
+  const ActivityState minuteState = (rawState == ActivityState::Still) ? ActivityState::Still : ActivityState::Moving;
+
+  if (minuteState == currentActivityState) {
+    if (pendingStateStreakMinutes > 0) {
+      currentStateStreakMinutes += pendingStateStreakMinutes;
+      pendingStateStreakMinutes = 0;
+      pendingActivityState = currentActivityState;
+    }
     currentStateStreakMinutes++;
-  } else {
-    currentActivityState = newState;
-    currentStateStreakMinutes = 1;
+    taskEXIT_CRITICAL();
+    return;
   }
 
-  stateDailyMinutes[static_cast<size_t>(newState)]++;
+  if (pendingStateStreakMinutes == 0 || pendingActivityState != minuteState) {
+    pendingActivityState = minuteState;
+    pendingStateStreakMinutes = 1;
+  } else {
+    pendingStateStreakMinutes++;
+  }
+
+  if (pendingStateStreakMinutes >= activityStateChangeMinutesThreshold) {
+    currentActivityState = minuteState;
+    currentStateStreakMinutes = pendingStateStreakMinutes;
+    pendingStateStreakMinutes = 0;
+    pendingActivityState = currentActivityState;
+  }
+
   taskEXIT_CRITICAL();
 }
 
@@ -456,6 +479,8 @@ void MotionController::ResetActivityTracking() {
   currentStateStreakMinutes = 0;
   std::fill(stateDailyMinutes.begin(), stateDailyMinutes.end(), 0);
   activityStateInitialized = false;
+  pendingActivityState = ActivityState::Still;
+  pendingStateStreakMinutes = 0;
   taskEXIT_CRITICAL();
 }
 

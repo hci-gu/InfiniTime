@@ -269,10 +269,13 @@ namespace Pinetime {
       bool storageAccessible = true;
 
       // Activity state tracking (per-day, not persisted)
+      static constexpr uint8_t activityStateChangeMinutesThreshold = 2;
       ActivityState currentActivityState = ActivityState::Still;
       uint32_t currentStateStreakMinutes = 0;
       std::array<uint32_t, 3> stateDailyMinutes = {0, 0, 0};
       bool activityStateInitialized = false;
+      ActivityState pendingActivityState = ActivityState::Still;
+      uint8_t pendingStateStreakMinutes = 0;
 
       void LoadMinuteAverageLog();
       void FlushBufferToDisk();

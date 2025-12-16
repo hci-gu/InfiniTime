@@ -148,7 +148,7 @@ namespace Pinetime {
 
       SystemMonitor monitor;
 
-      static constexpr uint32_t timeToMoveStillMinutesThreshold = 10;
+      static constexpr uint32_t timeToMoveStillMinutesThreshold = 30;
       bool timeToMoveReminderSentForCurrentStillStreak = false;
     };
   }

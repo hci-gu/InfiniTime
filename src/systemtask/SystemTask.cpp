@@ -531,8 +531,8 @@ void SystemTask::MaybeSendTimeToMoveReminder() {
   Pinetime::Controllers::NotificationManager::Notification notif;
   notif.category = Pinetime::Controllers::NotificationManager::Categories::SimpleAlert;
 
-  constexpr const char* title = "Move";
-  constexpr const char* message = "Time to move";
+  constexpr const char* title = "Upp och rulla";
+  constexpr const char* message = "Du har varit stilla i över 30 minuter. Dags att röra på sig!";
   constexpr size_t maxMessageSize = Pinetime::Controllers::NotificationManager::MaximumMessageSize();
 
   const size_t titleLen = std::strlen(title);
