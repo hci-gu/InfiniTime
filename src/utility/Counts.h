@@ -2,7 +2,16 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <FreeRTOS.h>
+
+// CountsCalculator is used on-device (FreeRTOS) and in host tooling.
+// Host builds define COUNTS_HOST_BUILD and use malloc/free instead of pvPortMalloc/vPortFree.
+#if defined(COUNTS_HOST_BUILD)
+  #include <cstdlib>
+  inline void* pvPortMalloc(size_t size) { return std::malloc(size); }
+  inline void vPortFree(void* ptr) { std::free(ptr); }
+#else
+  #include <FreeRTOS.h>
+#endif
 
 namespace Pinetime {
   namespace Utility {

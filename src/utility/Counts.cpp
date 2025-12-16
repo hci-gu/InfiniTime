@@ -2,7 +2,6 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
-#include <FreeRTOS.h>
 
 namespace Pinetime {
   namespace Utility {
