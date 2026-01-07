@@ -144,9 +144,13 @@ namespace Pinetime {
       void GoToSleep();
       void UpdateMotion();
       void MaybeSendTimeToMoveReminder();
+      void MaybeShutdownOnLowBattery();
+      void ShutdownToSystemOff();
       static constexpr TickType_t batteryMeasurementPeriod = pdMS_TO_TICKS(10 * 60 * 1000);
+      static constexpr uint8_t lowBatteryShutdownPercent = 2;
 
       SystemMonitor monitor;
+      bool lowBatteryShutdownTriggered = false;
 
       static constexpr uint32_t timeToMoveStillMinutesThreshold = 30;
       bool timeToMoveReminderSentForCurrentStillStreak = false;

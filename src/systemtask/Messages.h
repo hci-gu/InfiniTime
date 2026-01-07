@@ -30,7 +30,8 @@ namespace Pinetime {
       FlushMotionLog,
       StartFileTransfer,
       StopFileTransfer,
-      BleRadioEnableToggle
+      BleRadioEnableToggle,
+      LowBatteryShutdown
     };
   }
 }

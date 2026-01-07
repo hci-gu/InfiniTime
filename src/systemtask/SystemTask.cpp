@@ -1,7 +1,9 @@
 #include "systemtask/SystemTask.h"
 #include <hal/nrf_rtc.h>
+#include <hal/nrf_gpio.h>
 #include <libraries/gpiote/app_gpiote.h>
 #include <libraries/log/nrf_log.h>
+#include <mdk/nrf.h>
 #include "BootloaderVersion.h"
 #include "components/battery/BatteryController.h"
 #include "components/ble/BleController.h"
@@ -396,6 +398,13 @@ void SystemTask::Work() {
           break;
         case Messages::BatteryPercentageUpdated:
           nimbleController.NotifyBatteryLevel(batteryController.PercentRemaining());
+          MaybeShutdownOnLowBattery();
+          break;
+        case Messages::LowBatteryShutdown:
+          if (!lowBatteryShutdownTriggered) {
+            lowBatteryShutdownTriggered = true;
+            ShutdownToSystemOff();
+          }
           break;
         case Messages::OnPairing:
           GoToRunning();
@@ -561,6 +570,79 @@ void SystemTask::MaybeSendTimeToMoveReminder() {
   displayApp.PushMessage(Pinetime::Applications::Display::Messages::NewNotification);
 
   timeToMoveReminderSentForCurrentStillStreak = true;
+}
+
+void SystemTask::MaybeShutdownOnLowBattery() {
+  if (lowBatteryShutdownTriggered) {
+    return;
+  }
+
+  batteryController.ReadPowerState();
+  if (batteryController.IsPowerPresent()) {
+    return;
+  }
+
+  if (batteryController.PercentRemaining() > lowBatteryShutdownPercent) {
+    return;
+  }
+
+  lowBatteryShutdownTriggered = true;
+  ShutdownToSystemOff();
+}
+
+void SystemTask::ShutdownToSystemOff() {
+  NRF_LOG_INFO("[systemtask] Low battery (%u%%). Entering System OFF.", batteryController.PercentRemaining());
+
+  nimbleController.DisableRadio();
+  displayApp.PushMessage(Pinetime::Applications::Display::Messages::GoToSleep);
+  heartRateApp.PushMessage(Pinetime::Applications::HeartRateTask::Messages::GoToSleep);
+
+  if (IsSleeping()) {
+    bool needSpiWake = (state == SystemTaskState::Sleeping);
+    if (needSpiWake) {
+      spi.Wakeup();
+    }
+    spiNorFlash.Wakeup();
+    vTaskDelay(pdMS_TO_TICKS(5)); // Give flash time to fully wake from deep power-down
+    motionController.FlushToStorage();
+    spiNorFlash.Sleep();
+    if (needSpiWake) {
+      spi.Sleep();
+    }
+  } else {
+    motionController.FlushToStorage();
+  }
+
+  motionController.OnStorageSleep();
+  spiNorFlash.Sleep();
+
+  // Configure charger-only wake (PowerPresent is active low).
+  nrf_gpio_cfg(Pinetime::PinMap::Button,
+               NRF_GPIO_PIN_DIR_INPUT,
+               NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_PULLDOWN,
+               NRF_GPIO_PIN_S0S1,
+               NRF_GPIO_PIN_NOSENSE);
+
+  nrf_gpio_cfg(Pinetime::PinMap::Cst816sIrq,
+               NRF_GPIO_PIN_DIR_INPUT,
+               NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_PULLUP,
+               NRF_GPIO_PIN_S0S1,
+               NRF_GPIO_PIN_NOSENSE);
+
+  nrf_gpio_cfg(Pinetime::PinMap::PowerPresent,
+               NRF_GPIO_PIN_DIR_INPUT,
+               NRF_GPIO_PIN_INPUT_CONNECT,
+               NRF_GPIO_PIN_NOPULL,
+               NRF_GPIO_PIN_S0S1,
+               NRF_GPIO_PIN_SENSE_LOW);
+
+  NRF_POWER->SYSTEMOFF = 1;
+  __DSB();
+  for (;;) {
+    __WFE();
+  }
 }
 
 void SystemTask::HandleButtonAction(Controllers::ButtonActions action) {
