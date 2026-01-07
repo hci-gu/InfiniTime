@@ -477,22 +477,39 @@ void NimbleController::PersistBond(struct ble_gap_conn_desc& desc) {
 }
 
 void NimbleController::RestoreBond() {
-  lfs_file_t file_p;
+  lfs_file_t file_p {};
   union ble_store_value sec, cccd;
   uint8_t peer_count = 0;
 
   if (fs.FileOpen(&file_p, "/bond.dat", LFS_O_RDONLY) == 0) {
     memset(&sec, 0, sizeof sec);
-    fs.FileRead(&file_p, reinterpret_cast<uint8_t*>(&sec.sec), sizeof sec);
+    if (fs.FileRead(&file_p, reinterpret_cast<uint8_t*>(&sec.sec), sizeof sec) != static_cast<int>(sizeof sec)) {
+      fs.FileClose(&file_p);
+      fs.FileDelete("/bond.dat");
+      return;
+    }
     ble_store_write_our_sec(&sec.sec);
 
     memset(&sec, 0, sizeof sec);
-    fs.FileRead(&file_p, reinterpret_cast<uint8_t*>(&sec.sec), sizeof sec);
+    if (fs.FileRead(&file_p, reinterpret_cast<uint8_t*>(&sec.sec), sizeof sec) != static_cast<int>(sizeof sec)) {
+      fs.FileClose(&file_p);
+      fs.FileDelete("/bond.dat");
+      return;
+    }
     ble_store_write_peer_sec(&sec.sec);
 
-    fs.FileRead(&file_p, &peer_count, 1);
+    if (fs.FileRead(&file_p, &peer_count, 1) != 1) {
+      fs.FileClose(&file_p);
+      fs.FileDelete("/bond.dat");
+      return;
+    }
     for (int i = 0; i < peer_count; i++) {
-      fs.FileRead(&file_p, reinterpret_cast<uint8_t*>(&cccd.cccd), sizeof(struct ble_store_value_cccd));
+      if (fs.FileRead(&file_p, reinterpret_cast<uint8_t*>(&cccd.cccd), sizeof(struct ble_store_value_cccd)) !=
+          static_cast<int>(sizeof(struct ble_store_value_cccd))) {
+        fs.FileClose(&file_p);
+        fs.FileDelete("/bond.dat");
+        return;
+      }
       ble_store_write_cccd(&cccd.cccd);
     }
 

@@ -7,12 +7,12 @@ using namespace Pinetime::Controllers;
 
 bool FirmwareValidator::IsValidated() const {
   auto* imageOkPtr = reinterpret_cast<uint32_t*>(validBitAdress);
-  return (*imageOkPtr) == validBitValue;
+  return ((*imageOkPtr) & 0xFFu) == validBitValue;
 }
 
 void FirmwareValidator::Validate() {
   if (!IsValidated())
-    Pinetime::Drivers::InternalFlash::WriteWord(validBitAdress, validBitValue);
+    Pinetime::Drivers::InternalFlash::WriteWord(validBitAdress, validWordValue);
 }
 
 void FirmwareValidator::Reset() {

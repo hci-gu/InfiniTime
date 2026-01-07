@@ -40,8 +40,12 @@ namespace {
   lv_fs_res_t lvglRead(lv_fs_drv_t* drv, void* file_p, void* buf, uint32_t btr, uint32_t* br) {
     Pinetime::Controllers::FS* filesys = static_cast<Pinetime::Controllers::FS*>(drv->user_data);
     lfs_file_t* file = static_cast<lfs_file_t*>(file_p);
-    filesys->FileRead(file, static_cast<uint8_t*>(buf), btr);
-    *br = btr;
+    const int bytesRead = filesys->FileRead(file, static_cast<uint8_t*>(buf), btr);
+    if (bytesRead < 0) {
+      *br = 0;
+      return LV_FS_RES_FS_ERR;
+    }
+    *br = static_cast<uint32_t>(bytesRead);
     return LV_FS_RES_OK;
   }
 

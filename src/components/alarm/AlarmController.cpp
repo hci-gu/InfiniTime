@@ -142,20 +142,26 @@ void AlarmController::SetRecurrence(RecurType recurrence) {
 }
 
 void AlarmController::LoadSettingsFromFile() {
-  lfs_file_t alarmFile;
-  AlarmSettings alarmBuffer;
+  lfs_file_t alarmFile {};
+  AlarmSettings alarmBuffer {};
 
   if (fs.FileOpen(&alarmFile, "/.system/alarm.dat", LFS_O_RDONLY) != LFS_ERR_OK) {
     NRF_LOG_WARNING("[AlarmController] Failed to open alarm data file");
     return;
   }
 
-  fs.FileRead(&alarmFile, reinterpret_cast<uint8_t*>(&alarmBuffer), sizeof(alarmBuffer));
+  const int bytesRead = fs.FileRead(&alarmFile, reinterpret_cast<uint8_t*>(&alarmBuffer), sizeof(alarmBuffer));
   fs.FileClose(&alarmFile);
+  if (bytesRead != static_cast<int>(sizeof(alarmBuffer))) {
+    NRF_LOG_WARNING("[AlarmController] Alarm data file is corrupt (short read), discarding");
+    fs.FileDelete("/.system/alarm.dat");
+    return;
+  }
   if (alarmBuffer.version != alarmFormatVersion) {
     NRF_LOG_WARNING("[AlarmController] Loaded alarm settings has version %u instead of %u, discarding",
                     alarmBuffer.version,
                     alarmFormatVersion);
+    fs.FileDelete("/.system/alarm.dat");
     return;
   }
 
