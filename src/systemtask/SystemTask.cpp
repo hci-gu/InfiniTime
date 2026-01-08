@@ -158,6 +158,7 @@ void SystemTask::Work() {
   heartRateSensor.Init();
   heartRateSensor.Disable();
   heartRateApp.Start();
+  heartRateController.Enable();
 
   buttonHandler.Init(this);
 
